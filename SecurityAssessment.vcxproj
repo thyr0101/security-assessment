@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="17.0"
+         xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration><Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration><Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{A1B2C3D4-1111-2222-3333-444455556666}</ProjectGuid>
+    <RootNamespace>SecurityAssessment</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props"/>
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props"/>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <ConformanceMode>true</ConformanceMode>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <SDLCheck>true</SDLCheck>
+      <ControlFlowGuard>Guard</ControlFlowGuard>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <PreprocessorDefinitions>UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;NOMINMAX;WINVER=0x0A00;_WIN32_WINNT=0x0A00;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalOptions>/utf-8 /permissive- %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalOptions>/GUARD:CF %(AdditionalOptions)</AdditionalOptions>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="src\main.cpp"/>
+    <ClCompile Include="src\Utilities.cpp"/>
+    <ClCompile Include="src\WmiHelper.cpp"/>
+    <ClCompile Include="src\RegistryReader.cpp"/>
+    <ClCompile Include="src\Collectors\SystemCollector.cpp"/>
+    <ClCompile Include="src\Collectors\HardwareCollector.cpp"/>
+    <ClCompile Include="src\Collectors\SecurityCollector.cpp"/>
+    <ClCompile Include="src\Collectors\DefenderCollector.cpp"/>
+    <ClCompile Include="src\Collectors\FirewallCollector.cpp"/>
+    <ClCompile Include="src\Collectors\NetworkCollector.cpp"/>
+    <ClCompile Include="src\Collectors\StorageCollector.cpp"/>
+    <ClCompile Include="src\Collectors\ApplicationCollector.cpp"/>
+    <ClCompile Include="src\Collectors\PrivacyCollector.cpp"/>
+    <ClCompile Include="src\Collectors\PersistenceCollector.cpp"/>
+    <ClCompile Include="src\Security\ScoreEngine.cpp"/>
+    <ClCompile Include="src\Output\ConsoleRenderer.cpp"/>
+    <ClCompile Include="src\Output\JsonRenderer.cpp"/>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\Common.h"/>
+    <ClInclude Include="src\Utilities.h"/>
+    <ClInclude Include="src\WmiHelper.h"/>
+    <ClInclude Include="src\RegistryReader.h"/>
+    <ClInclude Include="src\Models.h"/>
+    <ClInclude Include="src\Collectors\SystemCollector.h"/>
+    <ClInclude Include="src\Collectors\HardwareCollector.h"/>
+    <ClInclude Include="src\Collectors\SecurityCollector.h"/>
+    <ClInclude Include="src\Collectors\DefenderCollector.h"/>
+    <ClInclude Include="src\Collectors\FirewallCollector.h"/>
+    <ClInclude Include="src\Collectors\NetworkCollector.h"/>
+    <ClInclude Include="src\Collectors\StorageCollector.h"/>
+    <ClInclude Include="src\Collectors\ApplicationCollector.h"/>
+    <ClInclude Include="src\Collectors\PrivacyCollector.h"/>
+    <ClInclude Include="src\Collectors\PersistenceCollector.h"/>
+    <ClInclude Include="src\Security\ScoreEngine.h"/>
+    <ClInclude Include="src\Output\ConsoleRenderer.h"/>
+    <ClInclude Include="src\Output\JsonRenderer.h"/>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets"/>
+</Project>

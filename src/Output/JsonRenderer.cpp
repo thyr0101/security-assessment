@@ -219,11 +219,23 @@ std::string RenderJson(const AssessmentResult& r) {
         if (i) o << ",";
         o << "{\"name\":" << Q(a.name)
           << ",\"installed\":" << B(a.installed)
-          << ",\"path\":" << Q(a.path)
-          << ",\"version\":" << Q(a.version)
-          << ",\"publisher\":" << Q(a.publisher)
-          << ",\"architecture\":" << Q(a.architecture)
-          << ",\"sha256\":" << Q(a.sha256) << "}";
+          << ",\"apps\":[";
+        for (size_t j = 0; j < a.apps.size(); ++j) {
+            auto& app = a.apps[j];
+            if (j) o << ",";
+            o << "{\"name\":" << Q(app.name)
+              << ",\"version\":" << Q(app.version)
+              << ",\"locations\":[";
+            for (size_t k = 0; k < app.locations.size(); ++k) {
+                auto& loc = app.locations[k];
+                if (k) o << ",";
+                o << "{\"path\":" << Q(loc.path)
+                  << ",\"version\":" << Q(loc.version)
+                  << ",\"sha256\":" << Q(loc.sha256) << "}";
+            }
+            o << "]}";
+        }
+        o << "]}";
     }
     o << "],";
 
@@ -300,4 +312,4 @@ std::string RenderJson(const AssessmentResult& r) {
     return o.str();
 }
 
-} // namespace sa
+} // namespace sa

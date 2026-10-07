@@ -41,6 +41,8 @@ const wchar_t* GBR()     { return g_color ? L"\u255D" : L"+"; }
 const wchar_t* GVert()   { return g_color ? L"\u2551" : L"|"; }
 const wchar_t* GFull()   { return g_color ? L"\u2588" : L"#"; }
 const wchar_t* GEmpty()  { return g_color ? L"\u2591" : L"."; }
+const wchar_t* GTee()    { return g_color ? L"\u251C\u2500" : L"|-"; }
+const wchar_t* GCorner() { return g_color ? L"\u2514\u2500" : L"`-"; }
 
 std::wostream& out() { return std::wcout; }
 
@@ -127,18 +129,16 @@ public:
         if (h_ == INVALID_HANDLE_VALUE || h_ == nullptr) return;
         if (!::GetConsoleMode(h_, &orig_)) return;           // redirected to file/pipe
         if (::SetConsoleMode(h_, orig_ | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
-            changed_ = true;
-            g_color = true;
+        changed_ = true;
+        g_color = true;
         }
     }
-
     ~ConsoleStyle() {
         if (g_color) out() << Rst();
         out().flush();
         if (changed_) ::SetConsoleMode(h_, orig_);
         g_color = false;
     }
-
     ConsoleStyle(const ConsoleStyle&) = delete;
     ConsoleStyle& operator=(const ConsoleStyle&) = delete;
 private:
@@ -279,31 +279,26 @@ void RenderConsole(const AssessmentResult& r) {
 
     // ------------------------------------------------------------ Applications
     Section(L"Applications");
-    for (auto& a : r.applications) {
-        if (!a.installed) continue;
-        out() << L"  " << Grn() << L"[+] " << Rst() << Bold() << Wht() << a.name << Rst() << L"\n";
-        out() << L"      " << Lbl() << PadRight(L"Path", 11) << Rst() << a.path << L"\n";
-        if (!a.version.empty())
-            out() << L"      " << Lbl() << PadRight(L"Version", 11) << Rst() << a.version << L"\n";
-        if (!a.publisher.empty())
-            out() << L"      " << Lbl() << PadRight(L"Publisher", 11) << Rst() << a.publisher << L"\n";
-        if (!a.architecture.empty())
-            out() << L"      " << Lbl() << PadRight(L"Arch", 11) << Rst() << a.architecture << L"\n";
-    }
-    {
-        bool any = false;
-        size_t col = 0;
-        for (auto& a : r.applications) {
-            if (a.installed) continue;
-            if (!any) { out() << L"\n  " << Dim() << L"Not installed" << Rst() << L"\n"; any = true; }
-            const size_t need = a.name.size() + 6;      // "[-] " + name + 2-space gap
-            if (col == 0)                         out() << L"    " << Dim();
-            else if (col + need > kWidth - 6)   { out() << Rst() << L"\n    " << Dim(); col = 0; }
-            else                                  out() << L"  ";
-            out() << L"[-] " << a.name;
-            col += need;
+    for (auto& category : r.applications) {
+        SubHeader(category.name,
+                  category.apps.empty() ? std::wstring(L"none found")
+                                        : Num(category.apps.size()) + L" found",
+                  category.apps.empty() ? Dim() : Grn());
+        for (auto& app : category.apps) {
+            out() << L"    " << Grn() << L"[+] " << Rst() << Bold() << Wht() << app.name << Rst();
+            if (!app.version.empty()) out() << L"  " << Cyn() << app.version << Rst();
+            out() << L"\n";
+            for (size_t i = 0; i < app.locations.size(); ++i) {
+                const auto& loc = app.locations[i];
+                const bool lastLoc = (i + 1 == app.locations.size());
+                out() << L"        " << Dim() << (lastLoc ? GCorner() : GTee()) << Rst() << L" "
+                      << Lbl() << loc.path << Rst();
+                // Only mention a version here when it differs from the one shown above.
+                if (!loc.version.empty() && loc.version != app.version)
+                    out() << L"  " << Dim() << L"(" << loc.version << L")" << Rst();
+                out() << L"\n";
+            }
         }
-        if (any) out() << Rst() << L"\n";
     }
 
     // ------------------------------------------------------------ Threshold findings

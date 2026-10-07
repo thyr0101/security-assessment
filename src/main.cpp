@@ -71,7 +71,10 @@ int wmain(int argc, wchar_t** argv) {
 
     try {
         auto apps = CollectApplications(DefaultApplicationList());
-        if (noHash) for (auto& a : apps) a.sha256.clear();
+        if (noHash)
+            for (auto& category : apps)
+                for (auto& app : category.apps)
+                    for (auto& loc : app.locations) loc.sha256.clear();
         r.applications = std::move(apps);
     }
     catch (...) {}
@@ -98,4 +101,4 @@ int wmain(int argc, wchar_t** argv) {
         std::wcout.flush();
     }
     return 0;
-}
+}

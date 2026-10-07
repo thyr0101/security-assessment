@@ -247,14 +247,23 @@ struct ApplicationDefinition {
     std::vector<std::wstring> possiblePaths; // may include env vars
 };
 
-struct ApplicationFinding {
-    std::wstring name;
-    bool installed = false;
+struct ApplicationLocation {
     std::wstring path;
     std::wstring version;
-    std::wstring publisher;
-    std::wstring architecture;
-    std::wstring sha256;    // only if installed
+    std::wstring sha256;    // empty if hashing failed or --no-hash was given
+};
+
+struct InstalledApplication {
+    std::wstring name;
+    std::wstring version;                        // version of the first location that reports one
+    std::vector<ApplicationLocation> locations;  // every place this application was found
+};
+
+// One entry per ApplicationDefinition, i.e. per category.
+struct ApplicationFinding {
+    std::wstring name;                           // category name
+    bool installed = false;                      // at least one application found
+    std::vector<InstalledApplication> apps;      // every application found in this category
     Status status = Status::NotFound;
 };
 

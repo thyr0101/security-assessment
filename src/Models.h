@@ -100,7 +100,9 @@ struct VirtualizationInfo {
     bool hypervisorRunning = false;
     bool vbsEnabled = false;
     bool hvciEnabled = false;
+    Tri hvciConfigured = Tri::Unknown; // Registry fallback is configuration, not proof of running.
     bool credentialGuardRunning = false;
+    bool runningServicesKnown = false;
     bool deviceGuardAvailable = false;
     bool sandboxAvailable = false;
     Status status = Status::Error;
@@ -128,6 +130,7 @@ struct SecurityInfo {
     DepInfo dep;
     bool smartAppControlOn = false;
     Tri smartAppControlState = Tri::Unknown;
+    bool smartAppControlEvaluation = false;
     bool windowsHelloAvailable = false;
     bool isElevated = false;
 };
@@ -161,18 +164,21 @@ struct DefenderInfo {
 struct FirewallProfile {
     std::wstring name;
     bool enabled = false;
-    DWORD defaultInbound = 0;   // 0=block,1=allow,2=notconfigured
-    DWORD defaultOutbound = 0;
+    DWORD defaultInbound = 2;   // 0=block,1=allow,2=unknown/notconfigured
+    DWORD defaultOutbound = 2;
     bool notificationsEnabled = false;
+    Status status = Status::Error;
 };
 
 struct FirewallInfo {
     std::vector<FirewallProfile> profiles;
     bool serviceRunning = false;
+    Status serviceStatus = Status::Error;
     Status status = Status::Error;
 };
 
 struct StorageVolume {
+    std::wstring volumeId;       // Volume GUID path, also used to match BitLocker instances.
     std::wstring mountPoint;      // C:
     std::wstring volumeLabel;     // renamed from `label` to avoid macro collision
     std::wstring filesystem;

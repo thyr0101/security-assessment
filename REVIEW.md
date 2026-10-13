@@ -1,0 +1,44 @@
+# Correctness and performance review
+
+Reviewed all source/header files, both build definitions, and the README. The application remains a native Windows console program with no third-party runtime dependency and no external command execution.
+
+## Changes
+
+| Area | Corrections |
+| --- | --- |
+| CLI / application inventory | `--no-hash` now bypasses hashing. Fixed concatenated Firefox/Brave paths, Signal's install path, and Discord's versioned locations. Directory matches are excluded, wildcard results are sorted, duplicate detection uses a hash set, and enumeration failures propagate. |
+| Registry | Bounded multi-string parsing rejects malformed data. Reads retry when a value grows and recheck type after reading. Integer reads validate size and use `memcpy`. Enumeration preserves the actual default value name. |
+| COM / WMI | COM cleanup balances only successful initialization calls. WMI enumerators, property variants, and collected objects have automatic cleanup. Failed or timed-out queries no longer masquerade as successful empty/partial results. Numeric strings and arrays are validated. |
+| File metadata / hashing | Version resources use their declared languages/code pages with fixed-version fallback. PE header reads are bounded and avoid mapping whole executables. BCrypt property failures are checked; file hashing uses sequential-read hints. |
+| OS / hardware | Counts logical processors across groups, sums cache instances, reads current CPU frequency through the native power API, rejects unknown ECC widths, and reads the system UI language. |
+| Security | Correct TPM manufacturer conversion and failure states. Restores the temporary firmware privilege. Separates configured HVCI from observed running services, fixes UAC credential-prompt detection, and distinguishes SAC evaluation from enforcement. Removes the unrelated Winlogon key as evidence for Hello. Individual security checks preserve other successful results on failure. |
+| Defender / firewall | Registry read failures no longer imply enabled Defender features. Missing threat properties leave the count unknown. Firewall actions default to unknown, profile/service errors are retained, and failed reads cannot earn default-block points. |
+| Storage | Enumerates existing physical-drive names instead of stopping at the first missing index. Bounds descriptor strings. Uses dynamic mount-path buffers and restores thread error mode. Queries BitLocker instances once and matches volume GUIDs, including folder mounts; checks method return codes and reads encryption percentage. |
+| Network | Initializes Winsock correctly, formats complete hardware addresses, formats numeric IP addresses without port suffixes, retries adapter-buffer growth, and handles an empty adapter list. |
+| Persistence / thresholds | Fixes the escaped MUI path, removes an empty registry scan and duplicate firewall service, checks count failures, honors recursive scans without following reparse points, preserves enumeration errors, and includes machine 32-bit RunOnce entries. Service handles have automatic cleanup. |
+| Privacy | Reads camera/microphone consent as strings and labels Remote Assistance accurately. |
+| Scoring | Keeps categories consistent for failing/partial rules, prevents TPM 1.2 receiving TPM 2.0 credit, and avoids awarding completed-inventory points on failed collection. Derives totals and maximum from the same rules; the current weights still sum to 1000. Missing required inputs produce unknown states. |
+| Output | Escapes all JSON rule strings, uses locale-independent JSON numbers, and adds collection-status fields. Console output distinguishes several unavailable checks from disabled features and displays scan errors. Restores the console code page and returns failure on stdout errors. |
+
+## Compatibility
+
+- Existing CLI options, report sections, and JSON keys remain. New JSON status/context fields are additive.
+- Corrected readings and rules can change scores. Full credit remains 1000; existing rule IDs and weights remain.
+- Application definitions and threshold definitions remain configured in C++.
+- The tool still reports a security posture, not malware detection or proof of security. Boolean model fields may need their accompanying status/context to distinguish unavailable data.
+
+## Validation
+
+- Native MSBuild Release and Debug builds; Debug uses the installed v145 toolset override because the project defaults to v143.
+- CMake-generated Release application and native regression targets.
+- Regression fixtures exercise malformed/unterminated registry strings, registry type mismatches, thresholds, recursive directory counts, application deduplication, SHA-256 known vectors, disabled hashing, unknown/healthy score scenarios, JSON escaping, COM apartment ownership, WMI numeric conversion, and failed queries.
+- The smoke harness parses synthetic and live JSON, exercises both hash modes, help, and redirected console output, checks score sums and original report sections, and confirms service names are unique.
+- Live checks run without elevation. Elevated-only BitLocker paths, other Windows versions, unusual storage topologies, and unavailable hardware need validation on matching systems.
+
+One local run observed 10.283 seconds for the updated `--json --no-hash` and 18.611 seconds for the original binary. The updated hashing run took 10.530 seconds. These are individual runs affected by WMI/provider warm-up, not a controlled performance benchmark.
+
+## API references
+
+- [COM initialization and balancing cleanup](https://learn.microsoft.com/en-us/windows/win32/api/objbase/nf-objbase-coinitialize)
+- [Smart App Control evaluation and enforcement](https://learn.microsoft.com/en-us/windows/apps/develop/smart-app-control/overview)
+- [Native processor power information structure omitted from SDK headers](https://learn.microsoft.com/en-us/windows/win32/power/processor-power-information-str)

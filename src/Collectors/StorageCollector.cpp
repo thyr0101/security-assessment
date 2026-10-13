@@ -7,6 +7,10 @@
 #include <setupapi.h>
 #include <devguid.h>
 #include <vector>
+#include <algorithm>
+#include <cstring>
+#include <comdef.h>
+#include <wrl/client.h>
 #pragma comment(lib, "setupapi.lib")
 
 namespace sa {
@@ -37,11 +41,27 @@ static std::wstring BusTypeName(STORAGE_BUS_TYPE t) {
 }
 
 static void CollectPhysicalDisks(StorageInfo& s) {
-    for (int i = 0; i < 32; ++i) {
+    std::vector<wchar_t> devices(32768);
+    DWORD count = 0;
+    while (!(count = ::QueryDosDeviceW(nullptr, devices.data(), static_cast<DWORD>(devices.size())))) {
+        if (::GetLastError() != ERROR_INSUFFICIENT_BUFFER || devices.size() >= (1u << 20)) return;
+        devices.resize(devices.size() * 2);
+    }
+    std::vector<unsigned> indices;
+    for (const wchar_t* name = devices.data(); *name; name += wcslen(name) + 1) {
+        constexpr wchar_t prefix[] = L"PhysicalDrive";
+        if (wcsncmp(name, prefix, _countof(prefix) - 1) != 0) continue;
+        const wchar_t* number = name + _countof(prefix) - 1;
+        wchar_t* end = nullptr;
+        unsigned long index = wcstoul(number, &end, 10);
+        if (end != number && !*end) indices.push_back(index);
+    }
+    std::sort(indices.begin(), indices.end());
+    for (unsigned i : indices) {
         std::wstring path = L"\\\\.\\PhysicalDrive" + std::to_wstring(i);
         WinHandle h(::CreateFileW(path.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                   nullptr, OPEN_EXISTING, 0, nullptr));
-        if (!h.valid()) break;
+        if (!h.valid()) continue;
 
         STORAGE_PROPERTY_QUERY q{};
         q.PropertyId = StorageDeviceProperty;
@@ -51,17 +71,26 @@ static void CollectPhysicalDisks(StorageInfo& s) {
         if (!::DeviceIoControl(h.get(), IOCTL_STORAGE_QUERY_PROPERTY,
                                &q, sizeof(q), &hdr, sizeof(hdr), &ret, nullptr))
             continue;
+        if (ret < sizeof(hdr) || hdr.Size < sizeof(STORAGE_DEVICE_DESCRIPTOR) || hdr.Size > (1u << 20))
+            continue;
         std::vector<BYTE> buf(hdr.Size);
         if (!::DeviceIoControl(h.get(), IOCTL_STORAGE_QUERY_PROPERTY,
                                &q, sizeof(q), buf.data(), (DWORD)buf.size(), &ret, nullptr))
             continue;
+        if (ret < sizeof(STORAGE_DEVICE_DESCRIPTOR) || ret > buf.size()) continue;
         auto* d = (STORAGE_DEVICE_DESCRIPTOR*)buf.data();
         StorageDisk disk;
         disk.index = i;
-        if (d->VendorIdOffset) disk.vendor = Utf8ToWide((char*)buf.data() + d->VendorIdOffset);
-        if (d->ProductIdOffset) disk.model = Utf8ToWide((char*)buf.data() + d->ProductIdOffset);
-        if (d->ProductRevisionOffset) disk.firmware = Utf8ToWide((char*)buf.data() + d->ProductRevisionOffset);
-        if (d->SerialNumberOffset) disk.serial = Utf8ToWide((char*)buf.data() + d->SerialNumberOffset);
+        auto readString = [&](DWORD offset) -> std::wstring {
+            if (!offset || offset >= ret) return {};
+            const char* start = reinterpret_cast<const char*>(buf.data() + offset);
+            const char* end = static_cast<const char*>(std::memchr(start, 0, ret - offset));
+            return end ? Trim(Utf8ToWide(std::string(start, end))) : std::wstring{};
+        };
+        disk.vendor = readString(d->VendorIdOffset);
+        disk.model = readString(d->ProductIdOffset);
+        disk.firmware = readString(d->ProductRevisionOffset);
+        disk.serial = readString(d->SerialNumberOffset);
         disk.busType = BusTypeName(d->BusType);
         disk.isNvme = (d->BusType == BusTypeNvme);
         disk.mediaType = disk.isNvme ? L"SSD" : L"Unknown";
@@ -92,24 +121,37 @@ static void CollectPhysicalDisks(StorageInfo& s) {
     }
 }
 
-static void CollectVolumes(StorageInfo& s) {
+static Status CollectVolumes(StorageInfo& s) {
     // Don't pop "no disk in drive" dialogs for empty removable/optical drives.
-    const UINT oldMode = ::SetErrorMode(SEM_FAILCRITICALERRORS);
+    struct ErrorModeGuard {
+        DWORD old = 0;
+        bool changed = ::SetThreadErrorMode(::GetThreadErrorMode() | SEM_FAILCRITICALERRORS, &old) != FALSE;
+        ~ErrorModeGuard() { if (changed) ::SetThreadErrorMode(old, nullptr); }
+    } errorMode;
 
     wchar_t volName[MAX_PATH]{};
     HANDLE h = ::FindFirstVolumeW(volName, MAX_PATH);
-    if (h == INVALID_HANDLE_VALUE) { ::SetErrorMode(oldMode); return; }
+    if (h == INVALID_HANDLE_VALUE) return StatusFromWin32(::GetLastError());
+    struct VolumeGuard { HANDLE h; ~VolumeGuard() { ::FindVolumeClose(h); } } guard{h};
+    Status status = Status::Success;
 
     do {
         // volName looks like \\?\Volume{GUID}\ . GetVolumePathNamesForVolumeNameW
         // REQUIRES that trailing backslash. The old code stripped it (that is only
         // needed when opening the volume as a device), so the call always failed and
         // no volume was ever listed - hence "NoVolumes" and no BitLocker result.
-        wchar_t paths[1024]{};
-        DWORD cch = _countof(paths);
-        if (::GetVolumePathNamesForVolumeNameW(volName, paths, cch, &cch) && paths[0]) {
-            for (wchar_t* p = paths; *p; p += wcslen(p) + 1) {
+        std::vector<wchar_t> paths(1024);
+        DWORD cch = static_cast<DWORD>(paths.size());
+        BOOL gotPaths = ::GetVolumePathNamesForVolumeNameW(volName, paths.data(), cch, &cch);
+        if (!gotPaths && ::GetLastError() == ERROR_MORE_DATA) {
+            paths.resize(cch);
+            gotPaths = ::GetVolumePathNamesForVolumeNameW(volName, paths.data(), cch, &cch);
+        }
+        if (!gotPaths) status = StatusFromWin32(::GetLastError());
+        if (gotPaths && paths[0]) {
+            for (wchar_t* p = paths.data(); *p; p += wcslen(p) + 1) {
                 StorageVolume v;
+                v.volumeId = volName;
                 v.mountPoint = p;
 
                 wchar_t fsName[MAX_PATH]{};
@@ -142,8 +184,9 @@ static void CollectVolumes(StorageInfo& s) {
         }
     } while (::FindNextVolumeW(h, volName, MAX_PATH));
 
-    ::FindVolumeClose(h);
-    ::SetErrorMode(oldMode);
+    const DWORD error = ::GetLastError();
+    if (error != ERROR_NO_MORE_FILES) status = StatusFromWin32(error);
+    return status;
 }
 
 // Win32_EncryptableVolume.EncryptionMethod values.
@@ -167,22 +210,18 @@ static bool CallUIntMethod(IWbemServices* svc, IWbemClassObject* obj,
                            const wchar_t* method, const wchar_t* outName,
                            unsigned long long& out) {
     if (!svc) return false;
-    VARIANT path; ::VariantInit(&path);
+    _variant_t path;
     if (FAILED(obj->Get(L"__PATH", 0, &path, nullptr, nullptr)) ||
         path.vt != VT_BSTR || !path.bstrVal) {
-        ::VariantClear(&path);
         return false;
     }
-    BSTR bm = ::SysAllocString(method);
-    IWbemClassObject* res = nullptr;
-    HRESULT hr = svc->ExecMethod(path.bstrVal, bm, 0, nullptr, nullptr, &res, nullptr);
-    ::SysFreeString(bm);
-    ::VariantClear(&path);
+    _bstr_t bm(method);
+    Microsoft::WRL::ComPtr<IWbemClassObject> res;
+    HRESULT hr = svc->ExecMethod(path.bstrVal, bm, 0, nullptr, nullptr, res.GetAddressOf(), nullptr);
     if (FAILED(hr) || !res) return false;
     unsigned long long rv = 0;
-    bool ok = !(WmiGetUInt(res, L"ReturnValue", rv) && rv != 0) &&
-              WmiGetUInt(res, outName, out);
-    res->Release();
+    bool ok = WmiGetUInt(res.Get(), L"ReturnValue", rv) && rv == 0 &&
+              WmiGetUInt(res.Get(), outName, out);
     return ok;
 }
 
@@ -194,36 +233,33 @@ static void CollectBitLocker(StorageInfo& s) {
     if (cs != Status::Success) {
         // This namespace is only accessible elevated.
         for (auto& v : s.volumes) {
+            if (v.driveType != L"Fixed") continue;
             v.bitLockerStatus = (cs == Status::AccessDenied) ? Status::AccessDenied
                                                              : Status::Unavailable;
             v.bitLockerNote = why;
         }
         return;
     }
+    WmiObjects objects;
+    const Status queryStatus = wmi.Query(L"SELECT * FROM Win32_EncryptableVolume", objects.items(), &why);
     for (auto& v : s.volumes) {
         if (v.driveType != L"Fixed") continue;
-        // Win32_EncryptableVolume is addressed by drive letter ("C:"); a folder
-        // mount point has no letter, so it cannot be queried this way.
-        if (v.mountPoint.size() < 2 || v.mountPoint[1] != L':') {
-            v.bitLockerStatus = Status::Unsupported;
-            v.bitLockerNote = L"folder mount point (no drive letter)";
+        // Match the volume GUID so folder mount points resolve to their own volume.
+        if (queryStatus != Status::Success) {
+            v.bitLockerStatus = queryStatus;
+            v.bitLockerNote = why;
             continue;
         }
         // SELECT *: the previous query named ProtectionMethod and PercentageEncrypted,
         // which are not properties of Win32_EncryptableVolume (they are method outputs).
         // WMI rejects the whole query when a named property doesn't exist, so every
         // volume came back "Unknown".
-        std::wstring wql = L"SELECT * FROM Win32_EncryptableVolume WHERE DriveLetter='"
-                           + v.mountPoint.substr(0, 2) + L"'";
-        std::vector<IWbemClassObject*> objs;
-        std::wstring qwhy;
-        if (wmi.Query(wql.c_str(), objs, &qwhy) != Status::Success || objs.empty()) {
-            v.bitLockerStatus = Status::Unavailable;
-            v.bitLockerNote = qwhy.empty() ? L"no Win32_EncryptableVolume instance" : qwhy;
-            for (auto* o : objs) o->Release();
-            continue;
-        }
-        for (auto* o : objs) {
+        v.bitLockerStatus = Status::Unavailable;
+        v.bitLockerNote = L"no Win32_EncryptableVolume instance";
+        for (auto* o : objects.items()) {
+            std::wstring deviceId;
+            if (!WmiGetString(o, L"DeviceID", deviceId) || !IEquals(deviceId, v.volumeId)) continue;
+            v.bitLockerNote.clear();
             unsigned long long ps = 2, em = 0;
             bool havePs = WmiGetUInt(o, L"ProtectionStatus", ps);
             if (!havePs)
@@ -235,7 +271,7 @@ static void CollectBitLocker(StorageInfo& s) {
                                         L"EncryptionMethod", em);
 
             if (havePs) {
-                v.bitLockerStatus = Status::Success;
+                v.bitLockerStatus = ps <= 1 ? Status::Success : Status::Unavailable;
                 // ProtectionStatus: 0 = unprotected, 1 = protected, 2 = unknown
                 v.bitLockerState = (ps == 1) ? L"On" : (ps == 0 ? L"Off" : L"Unknown");
             } else {
@@ -244,7 +280,10 @@ static void CollectBitLocker(StorageInfo& s) {
             }
             if (haveEm) v.encryptionMethod = EncryptionMethodName(em);
             else if (havePs && ps == 1) v.encryptionMethod = L"Unknown";
-            o->Release();
+            unsigned long long percentage = 0;
+            if (CallUIntMethod(wmi.services(), o, L"GetConversionStatus", L"EncryptionPercentage", percentage))
+                v.encryptionPercentage = std::to_wstring(percentage);
+            break;
         }
     }
 }
@@ -252,10 +291,9 @@ static void CollectBitLocker(StorageInfo& s) {
 StorageInfo CollectStorageInfo() {
     StorageInfo s;
     CollectPhysicalDisks(s);
-    CollectVolumes(s);
+    s.status = CollectVolumes(s);
     CollectBitLocker(s);
-    s.status = Status::Success;
     return s;
 }
 
-} // namespace sa
+} // namespace sa

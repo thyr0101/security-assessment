@@ -31,7 +31,7 @@ bool WmiGetString(IWbemClassObject* o, const wchar_t* name, std::wstring& out);
 bool WmiGetUInt  (IWbemClassObject* o, const wchar_t* name, unsigned long long& out);
 bool WmiGetBool  (IWbemClassObject* o, const wchar_t* name, bool& out);
 // Reads a CIM integer array (e.g. uint32[]). Returns true if the property exists
-// (an empty/NULL array yields true with an empty vector).
+// (an empty array succeeds; missing/NULL or malformed properties fail).
 bool WmiGetUIntArray(IWbemClassObject* o, const wchar_t* name,
                      std::vector<unsigned long long>& out);
 

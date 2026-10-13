@@ -11,6 +11,28 @@
 
 namespace sa {
 
+    inline Status StatusFromWin32(DWORD error) {
+        switch (error) {
+        case ERROR_SUCCESS: return Status::Success;
+        case ERROR_FILE_NOT_FOUND: case ERROR_PATH_NOT_FOUND:
+        case ERROR_SERVICE_DOES_NOT_EXIST: return Status::NotFound;
+        case ERROR_ACCESS_DENIED: case ERROR_PRIVILEGE_NOT_HELD: return Status::AccessDenied;
+        case ERROR_NOT_SUPPORTED: return Status::Unsupported;
+        default: return Status::Error;
+        }
+    }
+
+    class ServiceHandle {
+        SC_HANDLE h_;
+    public:
+        explicit ServiceHandle(SC_HANDLE h) noexcept : h_(h) {}
+        ~ServiceHandle() { if (h_) ::CloseServiceHandle(h_); }
+        ServiceHandle(const ServiceHandle&) = delete;
+        ServiceHandle& operator=(const ServiceHandle&) = delete;
+        SC_HANDLE get() const noexcept { return h_; }
+        explicit operator bool() const noexcept { return h_ != nullptr; }
+    };
+
     // ---------- RAII Windows handle ----------
     class WinHandle {
         HANDLE h_ = nullptr;
@@ -60,10 +82,11 @@ namespace sa {
     public:
         explicit ComInit(DWORD coinit = COINIT_MULTITHREADED) {
             hr_ = ::CoInitializeEx(nullptr, coinit);
-            if (hr_ == RPC_E_CHANGED_MODE) hr_ = S_OK; // already init in another mode
         }
         ~ComInit() { if (SUCCEEDED(hr_)) ::CoUninitialize(); }
-        bool ok() const noexcept { return SUCCEEDED(hr_); }
+        bool ok() const noexcept { return SUCCEEDED(hr_) || hr_ == RPC_E_CHANGED_MODE; }
+        ComInit(const ComInit&) = delete;
+        ComInit& operator=(const ComInit&) = delete;
     };
 
     // ---------- String helpers ----------

@@ -1,6 +1,8 @@
 #include "SystemCollector.h"
 #include "../RegistryReader.h"
 #include <windows.h>
+#include <winternl.h>
+#include <ctime>
 #include <chrono>
 
 namespace sa {
@@ -117,14 +119,14 @@ namespace sa {
         if (::GetUserDefaultLocaleName(loc, LOCALE_NAME_MAX_LENGTH)) o.locale = loc;
 
         {
-            LANGID lid = ::GetUserDefaultUILanguage();
+            LANGID lid = ::GetSystemDefaultUILanguage();
             wchar_t name[LOCALE_NAME_MAX_LENGTH]{};
             if (lid && ::LCIDToLocaleName(MAKELCID(lid, SORT_DEFAULT), name,
                 LOCALE_NAME_MAX_LENGTH, 0))
                 o.systemLanguage = name;
         }
 
-        o.status = Status::Success;
+        o.status = o.build ? Status::Success : Status::Unavailable;
         return o;
     }
 

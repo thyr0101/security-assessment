@@ -13,19 +13,21 @@
 namespace sa {
 
     static std::wstring FormatMac(const BYTE* a, ULONG len) {
-        if (len < 6) return L"";
-        wchar_t buf[32]{};
-        swprintf_s(buf, L"%02X:%02X:%02X:%02X:%02X:%02X",
-            a[0], a[1], a[2], a[3], a[4], a[5]);
-        return buf;
+        std::wstring result;
+        const wchar_t* hex = L"0123456789ABCDEF";
+        result.reserve(len * 3);
+        for (ULONG i = 0; i < len; ++i) {
+            if (i) result += L':';
+            result += hex[a[i] >> 4]; result += hex[a[i] & 15];
+        }
+        return result;
     }
 
     static std::wstring SockaddrToStr(const SOCKET_ADDRESS& sa) {
         if (!sa.lpSockaddr) return L"";
         wchar_t host[NI_MAXHOST]{};
-        DWORD len = NI_MAXHOST;
-        if (::WSAAddressToStringW(sa.lpSockaddr, sa.iSockaddrLength,
-            nullptr, host, &len) == 0)
+        if (::GetNameInfoW(sa.lpSockaddr, sa.iSockaddrLength,
+            host, NI_MAXHOST, nullptr, 0, NI_NUMERICHOST) == 0)
             return host;
         return L"";
     }
@@ -44,21 +46,23 @@ namespace sa {
 
     NetworkInfo CollectNetworkInfo() {
         NetworkInfo n;
+        WSADATA data{};
+        if (::WSAStartup(MAKEWORD(2, 2), &data) != 0) return n;
+        struct WinsockGuard { ~WinsockGuard() { ::WSACleanup(); } } winsock;
         ULONG size = 16 * 1024;
         std::vector<BYTE> buf(size);
         const ULONG flags = GAA_FLAG_INCLUDE_PREFIX | GAA_FLAG_INCLUDE_GATEWAYS
             | GAA_FLAG_SKIP_ANYCAST;
 
-        ULONG ret = ::GetAdaptersAddresses(AF_UNSPEC, flags, nullptr,
-            reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buf.data()),
-            &size);
-        if (ret == ERROR_BUFFER_OVERFLOW) {
+        ULONG ret = ERROR_BUFFER_OVERFLOW;
+        for (unsigned attempt = 0; attempt < 4 && ret == ERROR_BUFFER_OVERFLOW; ++attempt) {
             buf.resize(size);
             ret = ::GetAdaptersAddresses(AF_UNSPEC, flags, nullptr,
                 reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buf.data()),
                 &size);
         }
-        if (ret != NO_ERROR) { n.status = Status::Error; return n; }
+        if (ret == ERROR_NO_DATA) { n.status = Status::Success; return n; }
+        if (ret != NO_ERROR) { n.status = StatusFromWin32(ret); return n; }
 
         for (IP_ADAPTER_ADDRESSES* a =
             reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buf.data());

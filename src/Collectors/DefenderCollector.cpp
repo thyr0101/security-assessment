@@ -28,10 +28,10 @@ bool QueryWinDefend(bool& running) {
     return exists;
 }
 
-// True when a "Disable*" style flag is NOT set to 1 (absent => feature is on).
+// Registry absence is not evidence that a runtime protection is active.
 bool FlagNotDisabled(const std::wstring& sub, const wchar_t* value) {
     auto v = RegReadDword(HKEY_LOCAL_MACHINE, sub, value);
-    return !(v && *v == 1);
+    return v && *v == 0;
 }
 
 // Used only when the Defender WMI provider cannot be queried.
@@ -74,7 +74,8 @@ DefenderInfo CollectDefenderInfo() {
         // on this Defender build, the whole query is rejected (WBEM_E_INVALID_QUERY)
         // and Defender then looks "not installed". The old query named ThreatsCount,
         // which MSFT_MpComputerStatus does not have.
-        std::vector<IWbemClassObject*> objs;
+        WmiObjects objsOwner;
+        auto& objs = objsOwner.items();
         if (wmi.Query(L"SELECT * FROM MSFT_MpComputerStatus", objs, &why) == Status::Success
             && !objs.empty()) {
             gotStatus = true;
@@ -102,7 +103,6 @@ DefenderInfo CollectDefenderInfo() {
                 WmiGetString(o, L"FullScanStartTime", d.lastFullScan);
                 unsigned long long age = 0;     // uint32 in WMI, so not readable as a string
                 if (WmiGetUInt(o, L"QuickScanAge", age)) d.quickScanAge = std::to_wstring(age);
-                o->Release();
             }
         }
     }
@@ -118,30 +118,32 @@ DefenderInfo CollectDefenderInfo() {
 
     // Cloud protection / sample submission live in MSFT_MpPreference.
     {
-        std::vector<IWbemClassObject*> pref;
+        WmiObjects prefOwner;
+        auto& pref = prefOwner.items();
         if (gotStatus &&
             wmi.Query(L"SELECT * FROM MSFT_MpPreference", pref) == Status::Success) {
             for (auto* o : pref) {
                 unsigned long long u = 0;
                 if (WmiGetUInt(o, L"MAPSReporting", u))        d.cloudProtection = (u != 0);
                 if (WmiGetUInt(o, L"SubmitSamplesConsent", u)) d.sampleSubmission = (u == 1 || u == 3);
-                o->Release();
             }
         }
     }
 
     // Active threats come from MSFT_MpThreat (MSFT_MpComputerStatus has no threat count).
     if (gotStatus) {
-        std::vector<IWbemClassObject*> threats;
+        WmiObjects threatsOwner;
+        auto& threats = threatsOwner.items();
         if (wmi.Query(L"SELECT * FROM MSFT_MpThreat", threats) == Status::Success) {
             unsigned active = 0;
+            bool complete = true;
             for (auto* o : threats) {
                 bool b = false;
-                if (WmiGetBool(o, L"IsActive", b) && b) ++active;
-                o->Release();
+                if (!WmiGetBool(o, L"IsActive", b)) complete = false;
+                else if (b) ++active;
             }
             d.threatsCount = active;
-            d.threatsKnown = true;
+            d.threatsKnown = complete;
         }
         d.status = Status::Success;
     }

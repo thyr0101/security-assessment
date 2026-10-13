@@ -3,6 +3,7 @@
 #include <bcrypt.h>
 #include <vector>
 #include <cwctype>
+#include <limits>
 #pragma comment(lib, "version.lib")
 #pragma comment(lib, "bcrypt.lib")
 #pragma comment(lib, "shlwapi.lib")
@@ -10,9 +11,10 @@
 namespace sa {
 
 std::string WideToUtf8(const std::wstring& w) {
-    if (w.empty()) return {};
+    if (w.empty() || w.size() > static_cast<size_t>((std::numeric_limits<int>::max)())) return {};
     int n = ::WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(),
                                   nullptr, 0, nullptr, nullptr);
+    if (n <= 0) return {};
     std::string out(n, '\0');
     ::WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(),
                           out.data(), n, nullptr, nullptr);
@@ -20,8 +22,9 @@ std::string WideToUtf8(const std::wstring& w) {
 }
 
 std::wstring Utf8ToWide(const std::string& s) {
-    if (s.empty()) return {};
+    if (s.empty() || s.size() > static_cast<size_t>((std::numeric_limits<int>::max)())) return {};
     int n = ::MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);
+    if (n <= 0) return {};
     std::wstring out(n, L'\0');
     ::MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), out.data(), n);
     return out;
@@ -84,7 +87,10 @@ std::wstring ToLower(const std::wstring& s) {
 }
 
 bool IEquals(const std::wstring& a, const std::wstring& b) {
-    return ToLower(a) == ToLower(b);
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i)
+        if (towlower(a[i]) != towlower(b[i])) return false;
+    return true;
 }
 
 std::optional<FileVersionInfo> QueryFileVersion(const std::wstring& path) {
@@ -104,40 +110,71 @@ std::optional<FileVersionInfo> QueryFileVersion(const std::wstring& path) {
         { L"FileDescription", &info.fileDescription },
         { L"OriginalFilename",&info.originalFilename },
     };
+    struct Translation { WORD language; WORD codepage; };
+    Translation* translations = nullptr;
+    UINT translationBytes = 0;
+    ::VerQueryValueW(buf.data(), L"\\VarFileInfo\\Translation",
+                    reinterpret_cast<void**>(&translations), &translationBytes);
+    const Translation fallback{0x0409, 0x04b0};
+    if (!translations || translationBytes < sizeof(Translation)) {
+        translations = const_cast<Translation*>(&fallback);
+        translationBytes = sizeof(Translation);
+    }
     for (auto& f : fields) {
-        LPWSTR p = nullptr; UINT len = 0;
-        if (::VerQueryValueW(buf.data(), (L"\\StringFileInfo\\040904b0\\" + std::wstring(f.name)).c_str(),
-                             (LPVOID*)&p, &len) && p && len) {
-            f.out->assign(p, len ? len - 1 : 0);
+        for (size_t i = 0; i < translationBytes / sizeof(Translation); ++i) {
+            wchar_t prefix[64]{};
+            swprintf_s(prefix, L"\\StringFileInfo\\%04x%04x\\",
+                       translations[i].language, translations[i].codepage);
+            LPWSTR p = nullptr; UINT len = 0;
+            if (::VerQueryValueW(buf.data(), (std::wstring(prefix) + f.name).c_str(),
+                                 reinterpret_cast<void**>(&p), &len) && p && len) {
+                size_t count = len;
+                while (count && p[count - 1] == L'\0') --count;
+                f.out->assign(p, count);
+                if (!f.out->empty()) break;
+            }
         }
     }
 
+    VS_FIXEDFILEINFO* fixed = nullptr; UINT fixedSize = 0;
+    if (::VerQueryValueW(buf.data(), L"\\", reinterpret_cast<void**>(&fixed), &fixedSize) &&
+        fixed && fixedSize >= sizeof(*fixed) && fixed->dwSignature == 0xfeef04bd) {
+        auto version = [](DWORD hi, DWORD lo) {
+            return std::to_wstring(HIWORD(hi)) + L"." + std::to_wstring(LOWORD(hi)) +
+                   L"." + std::to_wstring(HIWORD(lo)) + L"." + std::to_wstring(LOWORD(lo));
+        };
+        if (info.fileVersion.empty()) info.fileVersion = version(fixed->dwFileVersionMS, fixed->dwFileVersionLS);
+        if (info.productVersion.empty()) info.productVersion = version(fixed->dwProductVersionMS, fixed->dwProductVersionLS);
+    }
+
     // Architecture via PE header
-    HANDLE f = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (f != INVALID_HANDLE_VALUE) {
-        HANDLE map = ::CreateFileMappingW(f, nullptr, PAGE_READONLY, 0, 0, nullptr);
-        if (map) {
-            const BYTE* p = (const BYTE*)::MapViewOfFile(map, FILE_MAP_READ, 0, 0, 0);
-            if (p) {
-                auto dos = (const IMAGE_DOS_HEADER*)p;
-                if (dos->e_magic == IMAGE_DOS_SIGNATURE) {
-                    auto nt = (const IMAGE_NT_HEADERS*)(p + dos->e_lfanew);
-                    if (nt->Signature == IMAGE_NT_SIGNATURE) {
-                        switch (nt->FileHeader.Machine) {
+    WinHandle f(::CreateFileW(path.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (f) {
+        IMAGE_DOS_HEADER dos{};
+        DWORD read = 0;
+        LARGE_INTEGER size{};
+        if (::GetFileSizeEx(f.get(), &size) &&
+            ::ReadFile(f.get(), &dos, sizeof(dos), &read, nullptr) && read == sizeof(dos) &&
+            dos.e_magic == IMAGE_DOS_SIGNATURE && dos.e_lfanew >= sizeof(dos) &&
+            static_cast<LONGLONG>(dos.e_lfanew) + static_cast<LONGLONG>(sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER)) <= size.QuadPart) {
+            LARGE_INTEGER offset{}; offset.QuadPart = dos.e_lfanew;
+            DWORD signature = 0;
+            IMAGE_FILE_HEADER header{};
+            if (::SetFilePointerEx(f.get(), offset, nullptr, FILE_BEGIN) &&
+                ::ReadFile(f.get(), &signature, sizeof(signature), &read, nullptr) && read == sizeof(signature) &&
+                signature == IMAGE_NT_SIGNATURE &&
+                ::ReadFile(f.get(), &header, sizeof(header), &read, nullptr) && read == sizeof(header)) {
+                        switch (header.Machine) {
                         case IMAGE_FILE_MACHINE_I386:  info.architecture = L"x86"; break;
                         case IMAGE_FILE_MACHINE_AMD64: info.architecture = L"x64"; break;
                         case IMAGE_FILE_MACHINE_ARM64: info.architecture = L"ARM64"; break;
                         case IMAGE_FILE_MACHINE_ARM:   info.architecture = L"ARM"; break;
                         default: info.architecture = L"Unknown"; break;
                         }
-                    }
-                }
-                ::UnmapViewOfFile(p);
             }
-            ::CloseHandle(map);
         }
-        ::CloseHandle(f);
     }
     return info;
 }
@@ -145,7 +182,7 @@ std::optional<FileVersionInfo> QueryFileVersion(const std::wstring& path) {
 std::optional<std::wstring> FileSha256(const std::wstring& path) {
     WinHandle f(::CreateFileW(path.c_str(), GENERIC_READ,
                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+                              nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
     if (!f.valid()) return std::nullopt;
 
     BCRYPT_ALG_HANDLE alg = nullptr;
@@ -153,9 +190,10 @@ std::optional<std::wstring> FileSha256(const std::wstring& path) {
         return std::nullopt;
     struct AlgCloser { BCRYPT_ALG_HANDLE h; ~AlgCloser(){ if (h) BCryptCloseAlgorithmProvider(h,0);} } ac{alg};
 
-    DWORD objSz = 0, cb = 0, hashLen = 0, digestLen = 0;
-    ::BCryptGetProperty(alg, BCRYPT_OBJECT_LENGTH, (PUCHAR)&objSz, sizeof(objSz), &cb, 0);
-    ::BCryptGetProperty(alg, BCRYPT_HASH_LENGTH,   (PUCHAR)&hashLen, sizeof(hashLen), &cb, 0);
+    DWORD objSz = 0, cb = 0, hashLen = 0;
+    if (!BCRYPT_SUCCESS(::BCryptGetProperty(alg, BCRYPT_OBJECT_LENGTH, (PUCHAR)&objSz, sizeof(objSz), &cb, 0)) ||
+        !BCRYPT_SUCCESS(::BCryptGetProperty(alg, BCRYPT_HASH_LENGTH, (PUCHAR)&hashLen, sizeof(hashLen), &cb, 0)) ||
+        hashLen != 32) return std::nullopt;
     std::vector<BYTE> obj(objSz), hash(hashLen);
 
     BCRYPT_HASH_HANDLE hh = nullptr;

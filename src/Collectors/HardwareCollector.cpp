@@ -4,8 +4,17 @@
 #include <windows.h>
 #include <intrin.h>
 #include <vector>
+#include <cstring>
+#include <powrprof.h>
+#pragma comment(lib, "powrprof.lib")
 
 namespace sa {
+
+// Documented by Microsoft but omitted from the Windows SDK headers.
+// https://learn.microsoft.com/windows/win32/power/processor-power-information-str
+struct ProcessorPowerInformation {
+    ULONG Number, MaxMhz, CurrentMhz, MhzLimit, MaxIdleState, CurrentIdleState;
+};
 
 static void DoCpuId(int leaf, int subleaf, int regs[4]) {
     __cpuidex(regs, leaf, subleaf);
@@ -96,24 +105,27 @@ CpuInfo CollectCpuInfo() {
             DWORD off = 0;
             while (off < len) {
                 auto* e = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)(buf.data() + off);
-                if (e->Cache.Level == 2) c.l2CacheKB = (unsigned)(e->Cache.CacheSize / 1024);
-                if (e->Cache.Level == 3) c.l3CacheKB = (unsigned)(e->Cache.CacheSize / 1024);
+                if (e->Cache.Level == 2) c.l2CacheKB += (unsigned)(e->Cache.CacheSize / 1024);
+                if (e->Cache.Level == 3) c.l3CacheKB += (unsigned)(e->Cache.CacheSize / 1024);
                 off += e->Size;
             }
         }
     }
 
-    SYSTEM_INFO si{};
-    ::GetNativeSystemInfo(&si);
-    c.logicalProcessors = si.dwNumberOfProcessors;
+    c.logicalProcessors = ::GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
     c.processorGroups = ::GetActiveProcessorGroupCount();
 
-    // Frequency from registry (documented CPU performance values are not in the SDK).
-    // Use CallNtPowerInformation if needed; simplest portable value is HKLM CPU "~MHz".
+    // Registry supplies the nominal frequency if the native power query is unavailable.
     if (auto v = RegReadDword(HKEY_LOCAL_MACHINE,
         L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", L"~MHz"))
         c.maxMhz = *v;
-    c.currentMhz = c.maxMhz;
+    // A nominal registry frequency cannot establish the current clock.
+    std::vector<ProcessorPowerInformation> power(c.logicalProcessors);
+    if (!power.empty() && ::CallNtPowerInformation(ProcessorInformation, nullptr, 0,
+        power.data(), static_cast<ULONG>(power.size() * sizeof(ProcessorPowerInformation))) == 0) {
+        c.currentMhz = power.front().CurrentMhz;
+        c.maxMhz = power.front().MaxMhz;
+    }
 
     c.status = Status::Success;
     return c;
@@ -135,7 +147,8 @@ MemoryInfo CollectMemoryInfo() {
     ComInit ci;
     WmiConnection wmi;
     if (wmi.Connect() == Status::Success) {
-        std::vector<IWbemClassObject*> objs;
+        WmiObjects objsOwner;
+        auto& objs = objsOwner.items();
         if (wmi.Query(L"SELECT Capacity,Speed,ConfiguredClockSpeed,Manufacturer,"
                       L"PartNumber,SerialNumber,SMBIOSMemoryType,FormFactor,"
                       L"DataWidth,TotalWidth FROM Win32_PhysicalMemory", objs) == Status::Success) {
@@ -152,9 +165,8 @@ MemoryInfo CollectMemoryInfo() {
                 WmiGetString(o, L"SerialNumber", mm.serialNumber);
                 unsigned long long dw = 0, tw = 0;
                 if (WmiGetUInt(o, L"DataWidth", dw) && WmiGetUInt(o, L"TotalWidth", tw))
-                    mm.ecc = (tw > dw);
+                    mm.ecc = (dw != 0 && dw != 0xffff && tw != 0xffff && tw > dw);
                 m.modules.push_back(std::move(mm));
-                o->Release();
             }
         }
     }
@@ -162,4 +174,4 @@ MemoryInfo CollectMemoryInfo() {
     return m;
 }
 
-} // namespace sa
+} // namespace sa

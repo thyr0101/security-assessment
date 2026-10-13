@@ -6,6 +6,7 @@
 #include <string>
 #include <system_error>
 #include <vector>
+#include <unordered_set>
 
 namespace fs = std::filesystem;
 
@@ -25,7 +26,7 @@ namespace sa {
                     L"%ProgramFiles(x86)%\\Microsoft\\Edge\\Application\\msedge.exe", // Edge x86
                     L"%ProgramFiles%\\imput\\Helium\\Application\\chrome.exe",       // Helium
                     L"%ProgramFiles(x86)%\\Mozilla Firefox\\firefox.exe",            // Firefox x86
-                    L"%ProgramFiles%\\Mozilla Firefox\\firefox.exe"                  // Firefox
+                    L"%ProgramFiles%\\Mozilla Firefox\\firefox.exe",                 // Firefox
                     L"%ProgramFiles%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe", // Brave
                     L"%ProgramFiles%\\LibreWolf\\librewolf.exe"                // LibreWolf
                 }
@@ -33,8 +34,9 @@ namespace sa {
             {
                 L"Messenger(s)",
                 {
-                    L"%LOCALAPPDATA%\\Programs\\signal - desktop\\signal.exe", // Signal
-                    L"%LOCALAPPDATA%\\Discord\\discord.exe",                   // Discord 
+                    L"%LOCALAPPDATA%\\Programs\\signal-desktop\\Signal.exe", // Signal
+                    L"%LOCALAPPDATA%\\Discord\\discord.exe",
+                    L"%LOCALAPPDATA%\\Discord\\app-*\\Discord.exe", // Versioned installs
                 }
             },
             {
@@ -60,7 +62,7 @@ void SplitEntry(const std::wstring& entry, std::wstring& name, std::wstring& pat
 // directory contents (so wildcards work in any path component, e.g. "app-*\\Discord.exe"),
 // and EVERY match is followed - not just the first one.
 void Glob(const fs::path& dir, const std::vector<std::wstring>& parts, size_t i,
-          std::vector<std::wstring>& out) {
+          std::vector<std::wstring>& out, Status& status) {
     if (i >= parts.size()) return;
     const std::wstring& part = parts[i];
     const bool last = (i + 1 == parts.size());
@@ -68,55 +70,67 @@ void Glob(const fs::path& dir, const std::vector<std::wstring>& parts, size_t i,
     if (part.find_first_of(L"*?") == std::wstring::npos) {
         const fs::path next = dir / part;
         std::error_code ec;
-        if (!fs::exists(next, ec)) return;
-        if (last) out.push_back(next.wstring());
-        else      Glob(next, parts, i + 1, out);
+        if (!fs::exists(next, ec)) {
+            if (ec) status = StatusFromWin32(static_cast<DWORD>(ec.value()));
+            return;
+        }
+        if (last) {
+            if (fs::is_regular_file(next, ec)) out.push_back(next.wstring());
+            if (ec) status = StatusFromWin32(static_cast<DWORD>(ec.value()));
+        } else Glob(next, parts, i + 1, out, status);
         return;
     }
 
     const std::wstring pattern = (dir / part).wstring();
     WIN32_FIND_DATAW fd{};
     HANDLE h = ::FindFirstFileW(pattern.c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE) return;
+    if (h == INVALID_HANDLE_VALUE) {
+        const Status failure = StatusFromWin32(::GetLastError());
+        if (failure != Status::NotFound) status = failure;
+        return;
+    }
+    struct FindGuard { HANDLE h; ~FindGuard() { ::FindClose(h); } } guard{h};
     do {
         if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0) continue;
         const fs::path next = dir / fd.cFileName;
-        if (last)                                            out.push_back(next.wstring());
-        else if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) Glob(next, parts, i + 1, out);
+        if (last && !(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) out.push_back(next.wstring());
+        else if (!last && (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) Glob(next, parts, i + 1, out, status);
     } while (::FindNextFileW(h, &fd));
-    ::FindClose(h);
+    if (::GetLastError() != ERROR_NO_MORE_FILES) status = StatusFromWin32(::GetLastError());
 }
 
 // Returns every existing path that matches `pattern` (environment variables expanded).
-std::vector<std::wstring> ResolvePaths(const std::wstring& pattern) {
+std::vector<std::wstring> ResolvePaths(const std::wstring& pattern, Status& status) {
     std::vector<std::wstring> found;
     const fs::path p(ExpandEnv(pattern));
     std::vector<std::wstring> parts;
     for (const auto& element : p.relative_path())
         if (!element.empty()) parts.push_back(element.wstring());
     if (parts.empty()) return found;
-    Glob(p.root_path(), parts, 0, found);
+    Glob(p.root_path(), parts, 0, found, status);
+    std::sort(found.begin(), found.end());
     return found;
 }
 
 } // namespace
 
 std::vector<ApplicationFinding> CollectApplications(
-    const std::vector<ApplicationDefinition>& defs) {
+    const std::vector<ApplicationDefinition>& defs, bool hashFiles) {
     std::vector<ApplicationFinding> out;
+    out.reserve(defs.size());
     for (const auto& def : defs) {
         ApplicationFinding category;
         category.name = def.name;
-        std::vector<std::wstring> seen;     // normalised, lower-cased paths already reported
+        Status scanStatus = Status::Success;
+        std::unordered_set<std::wstring> seen;
 
         for (const auto& entry : def.possiblePaths) {
             std::wstring forcedName, pattern;
             SplitEntry(entry, forcedName, pattern);
 
-            for (const auto& path : ResolvePaths(pattern)) {
+            for (const auto& path : ResolvePaths(pattern, scanStatus)) {
                 const std::wstring key = ToLower(fs::path(path).lexically_normal().wstring());
-                if (std::find(seen.begin(), seen.end(), key) != seen.end()) continue;
-                seen.push_back(key);
+                if (!seen.insert(key).second) continue;
 
                 ApplicationLocation loc;
                 loc.path = path;
@@ -127,7 +141,8 @@ std::vector<ApplicationFinding> CollectApplications(
                     if (name.empty()) name = Trim(vi->fileDescription);
                 }
                 if (name.empty()) name = fs::path(path).stem().wstring();
-                if (auto h = FileSha256(path)) loc.sha256 = *h;
+                if (hashFiles)
+                    if (auto h = FileSha256(path)) loc.sha256 = *h;
 
                 // Group locations of the same application (e.g. Program Files and
                 // Program Files (x86)) under one entry.
@@ -146,7 +161,8 @@ std::vector<ApplicationFinding> CollectApplications(
         }
 
         category.installed = !category.apps.empty();
-        category.status = category.installed ? Status::Success : Status::NotFound;
+        category.status = scanStatus != Status::Success ? scanStatus :
+            (category.installed ? Status::Success : Status::NotFound);
         out.push_back(std::move(category));
     }
     return out;

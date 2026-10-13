@@ -14,22 +14,28 @@ namespace sa {
     static void CollectTpm(TpmInfo& t) {
         ComInit ci;
         WmiConnection wmi;
-        if (wmi.Connect(L"ROOT\\CIMV2\\Security\\MicrosoftTpm") != Status::Success) {
-            t.status = Status::Unavailable;
+        t.status = wmi.Connect(L"ROOT\\CIMV2\\Security\\MicrosoftTpm");
+        if (t.status != Status::Success) {
             return;
         }
-        std::vector<IWbemClassObject*> objs;
+        WmiObjects objsOwner;
+        auto& objs = objsOwner.items();
         auto st = wmi.Query(L"SELECT SpecVersion,ManufacturerId,ManufacturerVersion,"
             L"IsEnabled_InitialValue,IsActivated_InitialValue,"
             L"IsOwned_InitialValue FROM Win32_Tpm", objs);
         if (st != Status::Success || objs.empty()) {
             t.present = false;
-            t.status = Status::NotFound;
+            t.status = st == Status::Success ? Status::NotFound : st;
             return;
         }
         for (auto* o : objs) {
             WmiGetString(o, L"SpecVersion", t.specVersion);
-            WmiGetString(o, L"ManufacturerId", t.manufacturerId);
+            unsigned long long manufacturer = 0;
+            if (WmiGetUInt(o, L"ManufacturerId", manufacturer)) {
+                wchar_t id[16]{};
+                swprintf_s(id, L"0x%08X", static_cast<unsigned>(manufacturer));
+                t.manufacturerId = id;
+            }
             WmiGetString(o, L"ManufacturerVersion", t.manufacturerVersion);
 
             bool b = false;
@@ -38,7 +44,6 @@ namespace sa {
             if (WmiGetBool(o, L"IsOwned_InitialValue", b)) t.owned = b;
 
             t.present = true;
-            o->Release();
         }
         t.ready = t.present && t.enabled && t.activated;
         t.status = Status::Success;
@@ -47,25 +52,25 @@ namespace sa {
     // ---------------- Secure Boot ----------------
     // Enabling a privilege only changes this process's own access token; it does not
     // change any system state.
-    static bool EnableSystemEnvironmentPrivilege() {
-        HANDLE tok = nullptr;
-        if (!::OpenProcessToken(::GetCurrentProcess(),
-                TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &tok))
-            return false;
-        WinHandle h(tok);
-        TOKEN_PRIVILEGES tp{};
-        tp.PrivilegeCount = 1;
-        if (!::LookupPrivilegeValueW(nullptr, SE_SYSTEM_ENVIRONMENT_NAME,
-                &tp.Privileges[0].Luid))
-            return false;
-        tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-        ::SetLastError(ERROR_SUCCESS);
-        if (!::AdjustTokenPrivileges(tok, FALSE, &tp, sizeof(tp), nullptr, nullptr))
-            return false;
-        // AdjustTokenPrivileges "succeeds" even when the privilege is not held and
-        // reports that through ERROR_NOT_ALL_ASSIGNED.
-        return ::GetLastError() == ERROR_SUCCESS;
-    }
+    class SystemEnvironmentPrivilege {
+        WinHandle token_;
+        TOKEN_PRIVILEGES previous_{};
+        bool changed_ = false;
+    public:
+        SystemEnvironmentPrivilege() {
+            if (!::OpenProcessToken(::GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, token_.put())) return;
+            TOKEN_PRIVILEGES tp{}; tp.PrivilegeCount = 1;
+            if (!::LookupPrivilegeValueW(nullptr, SE_SYSTEM_ENVIRONMENT_NAME, &tp.Privileges[0].Luid)) return;
+            tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+            DWORD size = sizeof(previous_);
+            ::SetLastError(ERROR_SUCCESS);
+            changed_ = ::AdjustTokenPrivileges(token_.get(), FALSE, &tp, sizeof(previous_), &previous_, &size) &&
+                       ::GetLastError() == ERROR_SUCCESS;
+        }
+        ~SystemEnvironmentPrivilege() {
+            if (changed_) ::AdjustTokenPrivileges(token_.get(), FALSE, &previous_, 0, nullptr, nullptr);
+        }
+    };
 
     static void CollectSecureBoot(SecureBootInfo& s) {
         FIRMWARE_TYPE ft = FirmwareTypeUnknown;
@@ -93,12 +98,12 @@ namespace sa {
         //    SeSystemEnvironmentPrivilege to be *enabled* in the token - an elevated
         //    token holds it but has it disabled by default, which is why the
         //    unmodified call fails with ERROR_PRIVILEGE_NOT_HELD.
-        (void)EnableSystemEnvironmentPrivilege();
+        SystemEnvironmentPrivilege privilege;
         static const wchar_t* SB_GUID = L"{8be4df61-93ca-11d2-aa0d-00e098032b8c}";
         BYTE buf[8]{};
         DWORD got = ::GetFirmwareEnvironmentVariableExW(L"SecureBoot", SB_GUID,
             buf, sizeof(buf), nullptr);
-        if (got == sizeof(BYTE) || got == sizeof(buf)) {
+        if (got == sizeof(BYTE)) {
             s.supported = Tri::Yes;
             s.enabled = (buf[0] != 0) ? Tri::Yes : Tri::No;
             s.status = Status::Success;
@@ -109,7 +114,7 @@ namespace sa {
             s.supported = Tri::No; s.enabled = Tri::No; s.status = Status::Success;
         }
         else if (err == ERROR_ENVVAR_NOT_FOUND) {
-            s.supported = Tri::Yes; s.enabled = Tri::No; s.status = Status::Success;
+            s.status = Status::Unavailable;
         }
         else if (err == ERROR_PRIVILEGE_NOT_HELD) {
             s.status = Status::AccessDenied;
@@ -128,7 +133,8 @@ namespace sa {
         // so querying it there always fails and every field stays "disabled".
         WmiConnection wmi;
         if (wmi.Connect(L"ROOT\\Microsoft\\Windows\\DeviceGuard") == Status::Success) {
-            std::vector<IWbemClassObject*> objs;
+            WmiObjects objsOwner;
+            auto& objs = objsOwner.items();
             if (wmi.Query(L"SELECT * FROM Win32_DeviceGuard", objs) == Status::Success) {
                 for (auto* o : objs) {
                     unsigned long long vbs = 0;
@@ -142,12 +148,12 @@ namespace sa {
                     std::vector<unsigned long long> running;
                     if (WmiGetUIntArray(o, L"SecurityServicesRunning", running)) {
                         haveRunning = true;
+                        v.runningServicesKnown = true;
                         for (unsigned long long id : running) {
                             if (id == 1) v.credentialGuardRunning = true;
                             if (id == 2) v.hvciEnabled = true;
                         }
                     }
-                    o->Release();
                 }
             }
         }
@@ -161,25 +167,26 @@ namespace sa {
                 L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\"
                 L"HypervisorEnforcedCodeIntegrity",
                 L"Enabled"))
-                v.hvciEnabled = (*h == 1);
+                v.hvciConfigured = (*h == 1) ? Tri::Yes : Tri::No;
         }
     }
 
     // ---------------- UAC ----------------
     static void CollectUac(UacInfo& u) {
         RegistryReader r;
-        if (r.Open(HKEY_LOCAL_MACHINE,
-            L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System")
-            != Status::Success) {
-            u.status = Status::AccessDenied;
-            return;
-        }
+        u.status = r.Open(HKEY_LOCAL_MACHINE,
+            L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System");
+        if (u.status != Status::Success) return;
         DWORD v = 0;
-        if (r.GetDword(L"EnableLUA", v) == Status::Success)                   u.enabled = (v != 0);
-        if (r.GetDword(L"ConsentPromptBehaviorAdmin", v) == Status::Success)  u.consentPromptBehaviorAdmin = v;
-        if (r.GetDword(L"PromptOnSecureDesktop", v) == Status::Success)       u.promptOnSecureDesktop = v;
-        u.consentPromptAdmin = (u.consentPromptBehaviorAdmin >= 2);
-        u.status = Status::Success;
+        auto read = [&](const wchar_t* name, DWORD& value) {
+            const auto status = r.GetDword(name, value);
+            if (status != Status::Success) u.status = status;
+            return status == Status::Success;
+        };
+        if (read(L"EnableLUA", v)) u.enabled = v != 0;
+        read(L"ConsentPromptBehaviorAdmin", u.consentPromptBehaviorAdmin);
+        read(L"PromptOnSecureDesktop", u.promptOnSecureDesktop);
+        u.consentPromptAdmin = u.consentPromptBehaviorAdmin >= 1 && u.consentPromptBehaviorAdmin <= 5;
     }
 
     // ---------------- DEP / SEHOP ----------------
@@ -208,10 +215,15 @@ namespace sa {
         // SEHOP is on by default on current Windows (Exploit protection reports it as
         // "On by default"); only an explicit DisableExceptionChainValidation != 0
         // turns it off. An absent value therefore means enabled, not "unknown".
-        auto s = RegReadDword(HKEY_LOCAL_MACHINE,
-            L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\kernel",
-            L"DisableExceptionChainValidation");
-        d.sehopEnabled = (s && *s != 0) ? Tri::No : Tri::Yes;
+        RegistryReader kernel;
+        const Status opened = kernel.Open(HKEY_LOCAL_MACHINE,
+            L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\kernel");
+        if (opened == Status::Success) {
+            DWORD value = 0;
+            const Status read = kernel.GetDword(L"DisableExceptionChainValidation", value);
+            if (read == Status::Success) d.sehopEnabled = value ? Tri::No : Tri::Yes;
+            else if (read == Status::NotFound) d.sehopEnabled = Tri::Yes;
+        }
 
         d.status = Status::Success;
     }
@@ -225,8 +237,8 @@ namespace sa {
             if (r.GetDword(L"VerifiedAndReputablePolicyState", v) == Status::Success) {
                 switch (v) {
                 case 0: s.smartAppControlState = Tri::No;  s.smartAppControlOn = false; break;
-                case 1:
-                case 2: s.smartAppControlState = Tri::Yes; s.smartAppControlOn = true;  break;
+                case 1: s.smartAppControlState = Tri::Yes; s.smartAppControlOn = true; break;
+                case 2: s.smartAppControlState = Tri::No; s.smartAppControlEvaluation = true; break;
                 default: s.smartAppControlState = Tri::Unknown; break;
                 }
             }
@@ -242,26 +254,20 @@ namespace sa {
             == Status::Success) {
             s.windowsHelloAvailable = true;
         }
-        if (!s.windowsHelloAvailable) {
-            RegistryReader r2;
-            if (r2.Open(HKEY_LOCAL_MACHINE,
-                L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\Notifications")
-                == Status::Success)
-                s.windowsHelloAvailable = true;
-        }
     }
 
     SecurityInfo CollectSecurityInfo() {
         SecurityInfo s;
-        CollectTpm(s.tpm);
-        CollectSecureBoot(s.secureBoot);
-        CollectVbs(s.virt);
-        CollectUac(s.uac);
-        CollectDep(s.dep);
-        CollectSac(s);
-        CollectHello(s);
+        // Keep the results of other checks when one provider throws.
+        try { CollectTpm(s.tpm); } catch (...) { s.tpm.status = Status::Error; }
+        try { CollectSecureBoot(s.secureBoot); } catch (...) { s.secureBoot.status = Status::Error; }
+        try { CollectVbs(s.virt); } catch (...) { s.virt.status = Status::Error; }
+        try { CollectUac(s.uac); } catch (...) { s.uac.status = Status::Error; }
+        try { CollectDep(s.dep); } catch (...) { s.dep.status = Status::Error; }
+        try { CollectSac(s); } catch (...) { s.smartAppControlState = Tri::Unknown; }
+        try { CollectHello(s); } catch (...) { s.windowsHelloAvailable = false; }
         s.isElevated = IsElevated();
         return s;
     }
 
-} // namespace sa
+} // namespace sa

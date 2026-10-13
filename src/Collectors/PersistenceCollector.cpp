@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <filesystem>
 #include <vector>
+#include <type_traits>
 
 namespace fs = std::filesystem;
 
@@ -12,11 +13,16 @@ namespace sa {
 static void AddRunKey(PersistenceReport& rep, HKEY root, const std::wstring& path,
                       const std::wstring& display) {
     RegistryReader r;
-    if (r.Open(root, path, KEY_WOW64_64KEY) != Status::Success) return;
+    const Status status = r.Open(root, path, KEY_WOW64_64KEY);
+    if (status != Status::Success) {
+        if (status != Status::NotFound) rep.status = status;
+        return;
+    }
     std::vector<std::pair<std::wstring, DWORD>> vals;
-    if (r.EnumValues(vals) != Status::Success) return;
+    const Status enumerated = r.EnumValues(vals);
+    if (enumerated != Status::Success) { rep.status = enumerated; return; }
     for (auto& [name, type] : vals) {
-        if (name == L"(Default)") continue;
+        if (name.empty()) continue;
         PersistenceEntry e;
         e.location = display;
         e.name = name;
@@ -34,33 +40,36 @@ static void ScanStartupFolders(PersistenceReport& rep) {
         fs::path dir = fs::path(buf) / L"Microsoft\\Windows\\Start Menu\\Programs\\Startup";
         std::error_code ec;
         if (fs::exists(dir, ec)) {
-            for (auto& it : fs::directory_iterator(dir, ec)) {
+            for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
                 PersistenceEntry e;
                 e.location = L"Startup (user)";
-                e.name = it.path().filename().wstring();
-                e.command = it.path().wstring();
+                e.name = it->path().filename().wstring();
+                e.command = it->path().wstring();
                 rep.entries.push_back(std::move(e));
             }
         }
+        if (ec) rep.status = StatusFromWin32(static_cast<DWORD>(ec.value()));
     }
     n = ::GetEnvironmentVariableW(L"ProgramData", buf, MAX_PATH);
     if (n && n < MAX_PATH) {
         fs::path dir = fs::path(buf) / L"Microsoft\\Windows\\Start Menu\\Programs\\Startup";
         std::error_code ec;
         if (fs::exists(dir, ec)) {
-            for (auto& it : fs::directory_iterator(dir, ec)) {
+            for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
                 PersistenceEntry e;
                 e.location = L"Startup (machine)";
-                e.name = it.path().filename().wstring();
-                e.command = it.path().wstring();
+                e.name = it->path().filename().wstring();
+                e.command = it->path().wstring();
                 rep.entries.push_back(std::move(e));
             }
         }
+        if (ec) rep.status = StatusFromWin32(static_cast<DWORD>(ec.value()));
     }
 }
 
 PersistenceReport CollectPersistence() {
     PersistenceReport rep;
+    rep.status = Status::Success;
     AddRunKey(rep, HKEY_CURRENT_USER,
               L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", L"HKCU\\...\\Run");
     AddRunKey(rep, HKEY_CURRENT_USER,
@@ -72,21 +81,26 @@ PersistenceReport CollectPersistence() {
     AddRunKey(rep, HKEY_LOCAL_MACHINE,
               L"Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Run",
               L"HKLM\\Wow6432Node\\...\\Run");
+    AddRunKey(rep, HKEY_LOCAL_MACHINE,
+              L"Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+              L"HKLM\\Wow6432Node\\...\\RunOnce");
     ScanStartupFolders(rep);
-    rep.status = Status::Success;
     return rep;
 }
 
 std::vector<RegistryScanDefinition> DefaultRegistryScans() {
     return {
-        { L"HKCU Run",              HKEY_CURRENT_USER,
+        { L"HKCU Run", HKEY_CURRENT_USER,
           L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 5, KEY_WOW64_64KEY },
-        { L"HKLM Run",              HKEY_LOCAL_MACHINE,
+
+        { L"HKLM Run", HKEY_LOCAL_MACHINE,
           L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 10, KEY_WOW64_64KEY },
-        { L"HKLM RunOnce",          HKEY_LOCAL_MACHINE,
+
+        { L"HKLM RunOnce", HKEY_LOCAL_MACHINE,
           L"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce", 5, KEY_WOW64_64KEY },
-        { L"HKLM Wow64 Run",        HKEY_LOCAL_MACHINE,
-          L"Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Run", 10, KEY_WOW64_64KEY },
+
+        { L"MUI Cache", HKEY_CURRENT_USER, // Cached application display metadata.
+          L"Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache", 10, KEY_WOW64_64KEY }
     };
 }
 
@@ -100,9 +114,9 @@ std::vector<RegistryFinding> RunRegistryScans(const std::vector<RegistryScanDefi
         RegistryReader r;
         f.status = r.Open(d.root, d.subkey, d.view);
         if (f.status == Status::Success) {
-            r.CountValues(f.valueCount);
-            r.CountSubkeys(f.subkeyCount);
-            f.exceeded = f.valueCount > d.threshold;
+            f.status = r.CountValues(f.valueCount);
+            if (f.status == Status::Success) f.status = r.CountSubkeys(f.subkeyCount);
+            f.exceeded = f.status == Status::Success && f.valueCount > d.threshold;
         }
         out.push_back(std::move(f));
     }
@@ -123,23 +137,36 @@ std::vector<DirectoryFinding> RunDirectoryScans(const std::vector<DirectoryScanD
     for (auto& d : defs) {
         DirectoryFinding f;
         f.name = d.name;
-        f.path = d.path;
+        f.path = ExpandEnv(d.path);
         f.threshold = d.threshold;
-        std::wstring path = ExpandEnv(d.path);
+        const auto& path = f.path;
         std::error_code ec;
-        if (!fs::exists(path, ec)) { f.status = Status::NotFound; out.push_back(std::move(f)); continue; }
-        fs::directory_iterator it(path, fs::directory_options::skip_permission_denied, ec);
-        if (ec) { f.status = Status::AccessDenied; out.push_back(std::move(f)); continue; }
-        unsigned long long files = 0, dirs = 0;
-        for (auto& e : it) {
-            std::error_code e2;
-            if (e.is_directory(e2)) ++dirs;
-            else ++files;
+        if (!fs::exists(path, ec)) {
+            f.status = ec ? StatusFromWin32(static_cast<DWORD>(ec.value())) : Status::NotFound;
+            out.push_back(std::move(f)); continue;
         }
-        f.fileCount = files;
-        f.dirCount = dirs;
-        f.exceeded = files > d.threshold;
         f.status = Status::Success;
+        auto count = [&](auto it) {
+            const decltype(it) end;
+            for (; !ec && it != end; it.increment(ec)) {
+                const bool directory = it->is_directory(ec);
+                if (ec) break;
+                if (directory) ++f.dirCount;
+                else ++f.fileCount;
+                if constexpr (std::is_same_v<decltype(it), fs::recursive_directory_iterator>) {
+                    // Avoid traversing junctions/reparse points into another tree or a cycle.
+                    const DWORD attrs = ::GetFileAttributesW(it->path().c_str());
+                    if (attrs == INVALID_FILE_ATTRIBUTES) {
+                        ec = std::error_code(::GetLastError(), std::system_category()); break;
+                    }
+                    if (attrs & FILE_ATTRIBUTE_REPARSE_POINT) it.disable_recursion_pending();
+                }
+            }
+        };
+        if (d.recursive) count(fs::recursive_directory_iterator(path, ec));
+        else count(fs::directory_iterator(path, ec));
+        if (ec) f.status = StatusFromWin32(static_cast<DWORD>(ec.value()));
+        f.exceeded = f.fileCount > d.threshold;
         out.push_back(std::move(f));
     }
     return out;
@@ -148,7 +175,7 @@ std::vector<DirectoryFinding> RunDirectoryScans(const std::vector<DirectoryScanD
 // ---------------- Security-relevant services ----------------
 static const wchar_t* kSecurityServices[] = {
     L"WinDefend", L"WdNisSvc", L"SecurityHealthService", L"wscsvc",
-    L"MpsSvc", L"wuauserv", L"CryptSvc", L"EventLog", L"mpssvc"
+    L"MpsSvc", L"wuauserv", L"CryptSvc", L"EventLog"
 };
 
 static std::wstring StateName(DWORD s) {
@@ -176,32 +203,33 @@ static std::wstring StartName(DWORD s) {
 
 ServiceReport CollectSecurityServices() {
     ServiceReport rep;
-    SC_HANDLE scm = ::OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT | SC_MANAGER_ENUMERATE_SERVICE);
-    if (!scm) { rep.status = Status::AccessDenied; return rep; }
+    ServiceHandle scm(::OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT));
+    if (!scm) { rep.status = StatusFromWin32(::GetLastError()); return rep; }
     for (auto* name : kSecurityServices) {
         ServiceEntry e;
         e.name = name;
-        SC_HANDLE svc = ::OpenServiceW(scm, name, SERVICE_QUERY_STATUS | SERVICE_QUERY_CONFIG);
-        if (!svc) { e.status = Status::NotFound; rep.entries.push_back(std::move(e)); continue; }
+        ServiceHandle svc(::OpenServiceW(scm.get(), name, SERVICE_QUERY_STATUS | SERVICE_QUERY_CONFIG));
+        if (!svc) { e.status = StatusFromWin32(::GetLastError()); rep.entries.push_back(std::move(e)); continue; }
+        e.status = Status::Success;
         SERVICE_STATUS_PROCESS ssp{}; DWORD needed = 0;
-        if (::QueryServiceStatusEx(svc, SC_STATUS_PROCESS_INFO, (LPBYTE)&ssp, sizeof(ssp), &needed))
+        if (::QueryServiceStatusEx(svc.get(), SC_STATUS_PROCESS_INFO, (LPBYTE)&ssp, sizeof(ssp), &needed))
             e.state = StateName(ssp.dwCurrentState);
+        else e.status = StatusFromWin32(::GetLastError());
         DWORD cfgSz = 0;
-        ::QueryServiceConfigW(svc, nullptr, 0, &cfgSz);
+        ::QueryServiceConfigW(svc.get(), nullptr, 0, &cfgSz);
         if (cfgSz) {
             std::vector<BYTE> buf(cfgSz);
             auto* cfg = (QUERY_SERVICE_CONFIGW*)buf.data();
-            if (::QueryServiceConfigW(svc, cfg, cfgSz, &cfgSz)) {
+            if (::QueryServiceConfigW(svc.get(), cfg, cfgSz, &cfgSz)) {
                 e.displayName = cfg->lpDisplayName ? cfg->lpDisplayName : L"";
                 e.startType = StartName(cfg->dwStartType);
                 e.exePath = cfg->lpBinaryPathName ? cfg->lpBinaryPathName : L"";
             }
+            else e.status = StatusFromWin32(::GetLastError());
         }
-        e.status = Status::Success;
-        ::CloseServiceHandle(svc);
+        else e.status = StatusFromWin32(::GetLastError());
         rep.entries.push_back(std::move(e));
     }
-    ::CloseServiceHandle(scm);
     rep.status = Status::Success;
     return rep;
 }

@@ -22,7 +22,11 @@
 using namespace sa;
 
 int wmain(int argc, wchar_t** argv) {
-    ::SetConsoleOutputCP(CP_UTF8);
+    struct ConsoleCodePage {
+        UINT original = ::GetConsoleOutputCP();
+        bool changed = original != 0 && original != CP_UTF8 && ::SetConsoleOutputCP(CP_UTF8);
+        ~ConsoleCodePage() { if (changed) ::SetConsoleOutputCP(original); }
+    } consoleCodePage;
 
     bool json = false;
     bool noHash = false;
@@ -40,10 +44,10 @@ int wmain(int argc, wchar_t** argv) {
     // Mixing std::cout (char) with a stream in _O_U8TEXT mode is what
     // tripped the UCRT fputc assertion.
     if (json) {
-        _setmode(_fileno(stdout), _O_BINARY);   // raw bytes, for UTF-8 JSON
+        if (_setmode(_fileno(stdout), _O_BINARY) == -1) return 1; // UTF-8 JSON bytes
     }
     else {
-        _setmode(_fileno(stdout), _O_U8TEXT);   // wide stream -> UTF-8 on the way out
+        if (_setmode(_fileno(stdout), _O_U8TEXT) == -1) return 1; // wide stream -> UTF-8
     }
 
     ComInit ci; // COM initialized once for the whole app
@@ -70,12 +74,7 @@ int wmain(int argc, wchar_t** argv) {
     catch (...) { r.services.status = Status::Error; }
 
     try {
-        auto apps = CollectApplications(DefaultApplicationList());
-        if (noHash)
-            for (auto& category : apps)
-                for (auto& app : category.apps)
-                    for (auto& loc : app.locations) loc.sha256.clear();
-        r.applications = std::move(apps);
+        r.applications = CollectApplications(DefaultApplicationList(), !noHash);
     }
     catch (...) {}
 
@@ -95,10 +94,12 @@ int wmain(int argc, wchar_t** argv) {
         std::string out = RenderJson(r);
         std::cout << out << "\n";
         std::cout.flush();
+        if (!std::cout) return 1;
     }
     else {
         RenderConsole(r);
         std::wcout.flush();
+        if (!std::wcout) return 1;
     }
     return 0;
 }

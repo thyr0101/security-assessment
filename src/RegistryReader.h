@@ -23,7 +23,7 @@ public:
     Status GetMultiSz(const wchar_t* name, std::vector<std::wstring>& out) const;
     Status GetBinary(const wchar_t* name, std::vector<BYTE>& out) const;
 
-    // Enumerate immediate values (name/type). Empty value name returned as L"(Default)".
+    // Enumerate immediate values (name/type). The default value has an empty name.
     Status EnumValues(std::vector<std::pair<std::wstring, DWORD>>& out) const;
     // Count immediate values.
     Status CountValues(DWORD& out) const;

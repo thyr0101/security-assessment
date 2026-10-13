@@ -5,6 +5,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 // Presentation only: this file formats values that were already collected and scored.
 // Colors use ANSI escape sequences, enabled only when stdout is a real console that
@@ -82,8 +83,8 @@ std::wstring Bar(double frac, size_t width, const wchar_t* color) {
 
 // ---- layout helpers ----
 void Banner(const wchar_t* title) {
-    const size_t inner = kWidth - 2;
     const std::wstring t = title;
+    const size_t inner = (std::max)(kWidth - 2, t.size());
     const size_t left = (inner - t.size()) / 2;
     const size_t right = inner - t.size() - left;
     out() << Cyn() << GTL() << Repeat(GHeavy(), inner) << GTR() << Rst() << L"\n"
@@ -116,6 +117,11 @@ void KV(const wchar_t* label, const std::wstring& value, const wchar_t* color = 
 
 void Flag(const wchar_t* label, bool on) {
     KV(label, on ? L"ENABLED" : L"DISABLED", on ? Grn() : Red());
+}
+
+void Flag(const wchar_t* label, bool on, Status status) {
+    if (status == Status::Success) Flag(label, on);
+    else KV(label, L"Unknown (" + std::wstring(ToW(status)) + L")", Yel());
 }
 
 // ---- ANSI mode RAII ----
@@ -191,14 +197,15 @@ void RenderConsole(const AssessmentResult& r) {
     // ------------------------------------------------------------ Hardware security
     Section(L"Hardware Security");
     {
+        const bool tpmKnown = r.security.tpm.status == Status::Success || r.security.tpm.status == Status::NotFound;
         const std::wstring tpmText =
             (r.security.tpm.present
                 ? (r.security.tpm.specVersion.empty() ? std::wstring(L"Present")
                                                       : r.security.tpm.specVersion)
                 : std::wstring(L"Absent"))
             + L" / " + (r.security.tpm.ready ? L"Ready" : L"NotReady");
-        KV(L"TPM", tpmText,
-           (r.security.tpm.present && r.security.tpm.ready) ? Grn() : Red());
+        KV(L"TPM", tpmKnown ? tpmText : L"Unknown (" + std::wstring(ToW(r.security.tpm.status)) + L")",
+           !tpmKnown ? Yel() : (r.security.tpm.present && r.security.tpm.ready) ? Grn() : Red());
     }
     {
         const Tri sb = r.security.secureBoot.enabled;
@@ -210,19 +217,22 @@ void RenderConsole(const AssessmentResult& r) {
         const bool virt = CpuVirtualizationAvailable(r.cpu);
         KV(L"Virtualization", virt ? L"Supported" : L"Unsupported", virt ? Grn() : Red());
     }
-    Flag(L"VBS", r.security.virt.vbsEnabled);
-    Flag(L"HVCI", r.security.virt.hvciEnabled);
-    Flag(L"Credential Guard", r.security.virt.credentialGuardRunning);
+    Flag(L"VBS", r.security.virt.vbsEnabled, r.security.virt.status);
+    const Status runningStatus = r.security.virt.runningServicesKnown ? Status::Success : Status::Unavailable;
+    Flag(L"HVCI", r.security.virt.hvciEnabled, runningStatus);
+    Flag(L"Credential Guard", r.security.virt.credentialGuardRunning, runningStatus);
+    if (r.security.virt.hvciConfigured != Tri::Unknown)
+        KV(L"HVCI configured", ToW(r.security.virt.hvciConfigured), Yel());
 
     // ------------------------------------------------------------ Protection
     Section(L"Protection");
     SubHeader(L"Microsoft Defender", L"", Dim());
-    Flag(L"Defender", r.defender.enabled);
-    Flag(L"Real-Time", r.defender.realTimeProtection);
-    Flag(L"Behavior Monitoring", r.defender.behaviorMonitor);
-    Flag(L"IOAV Protection", r.defender.ioav);
-    Flag(L"Cloud Protection", r.defender.cloudProtection);
-    Flag(L"Tamper Protection", r.defender.tamperProtection);
+    Flag(L"Defender", r.defender.enabled, r.defender.status);
+    Flag(L"Real-Time", r.defender.realTimeProtection, r.defender.status);
+    Flag(L"Behavior Monitoring", r.defender.behaviorMonitor, r.defender.status);
+    Flag(L"IOAV Protection", r.defender.ioav, r.defender.status);
+    Flag(L"Cloud Protection", r.defender.cloudProtection, r.defender.status);
+    Flag(L"Tamper Protection", r.defender.tamperProtection, r.defender.status);
     KV(L"Engine Version", r.defender.amEngineVersion);
     KV(L"Signatures Version", r.defender.antivirusSignatureVersion);
     if (!r.defender.reason.empty())
@@ -230,7 +240,7 @@ void RenderConsole(const AssessmentResult& r) {
 
     SubHeader(L"Windows Firewall", L"", Dim());
     for (auto& p : r.firewall.profiles)
-        Flag((p.name).c_str(), p.enabled);
+        Flag((p.name).c_str(), p.enabled, p.status);
 
     // ------------------------------------------------------------ Storage
     Section(L"Storage");
@@ -306,6 +316,10 @@ void RenderConsole(const AssessmentResult& r) {
     SubHeader(L"Registry", L"", Dim());
     bool anyReg = false;
     for (auto& f : r.registryFindings) {
+        if (f.status != Status::Success && f.status != Status::NotFound) {
+            anyReg = true;
+            KV(f.name.c_str(), ToW(f.status), Yel());
+        }
         if (f.exceeded) {
             anyReg = true;
             out() << L"  " << Yel() << L"[!] " << Rst() << Bold() << f.name << Rst() << L": " << f.path
@@ -318,6 +332,10 @@ void RenderConsole(const AssessmentResult& r) {
     SubHeader(L"Directories", L"", Dim());
     bool anyDir = false;
     for (auto& f : r.directoryFindings) {
+        if (f.status != Status::Success && f.status != Status::NotFound) {
+            anyDir = true;
+            KV(f.name.c_str(), ToW(f.status), Yel());
+        }
         if (f.exceeded) {
             anyDir = true;
             out() << L"  " << Yel() << L"[!] " << Rst() << f.path << L" contains " << f.fileCount

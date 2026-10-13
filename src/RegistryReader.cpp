@@ -1,10 +1,13 @@
 #include "RegistryReader.h"
+#include <algorithm>
+#include <cstring>
 
 namespace sa {
 
 Status RegistryReader::Open(HKEY root, const std::wstring& sub, REGSAM view,
                             std::wstring* reason) {
     key_.close();
+    if (reason) reason->clear();
     path_ = sub;
     LSTATUS st = ::RegOpenKeyExW(root, sub.c_str(), 0, KEY_READ | view, key_.put());
     if (st == ERROR_SUCCESS) return Status::Success;
@@ -15,6 +18,8 @@ Status RegistryReader::Open(HKEY root, const std::wstring& sub, REGSAM view,
 }
 
 static Status ReadRaw(HKEY k, const wchar_t* name, DWORD wantType, std::vector<BYTE>& buf) {
+    if (!k) return Status::Error;
+    for (unsigned attempt = 0; attempt < 4; ++attempt) {
     DWORD type = 0, cb = 0;
     LSTATUS st = ::RegQueryValueExW(k, name, nullptr, &type, nullptr, &cb);
     if (st == ERROR_FILE_NOT_FOUND) return Status::NotFound;
@@ -23,20 +28,29 @@ static Status ReadRaw(HKEY k, const wchar_t* name, DWORD wantType, std::vector<B
     if (wantType && type != wantType) return Status::Unsupported;
     buf.resize(cb ? cb : 1);
     st = ::RegQueryValueExW(k, name, nullptr, &type, buf.data(), &cb);
+    if (st == ERROR_MORE_DATA) continue; // Value grew between the size and data reads.
+    if (st == ERROR_FILE_NOT_FOUND) return Status::NotFound;
+    if (st == ERROR_ACCESS_DENIED) return Status::AccessDenied;
     if (st != ERROR_SUCCESS) return Status::Error;
+    if (wantType && type != wantType) return Status::Unsupported;
     buf.resize(cb);
     return Status::Success;
+    }
+    return Status::Error;
 }
 
 Status RegistryReader::GetString(const wchar_t* name, std::wstring& out) const {
     std::vector<BYTE> buf;
     Status s = ReadRaw(key_.get(), name, REG_SZ, buf);
-    if (s != Status::Success) {
+    if (s == Status::Unsupported) {
         s = ReadRaw(key_.get(), name, REG_EXPAND_SZ, buf);
         if (s != Status::Success) return s;
     }
-    out.assign((const wchar_t*)buf.data(), buf.size() / sizeof(wchar_t));
-    while (!out.empty() && out.back() == L'\0') out.pop_back();
+    if (s != Status::Success) return s;
+    if (buf.size() % sizeof(wchar_t)) return Status::Error;
+    out.resize(buf.size() / sizeof(wchar_t));
+    if (!buf.empty()) std::memcpy(out.data(), buf.data(), buf.size());
+    if (const size_t end = out.find(L'\0'); end != std::wstring::npos) out.resize(end);
     return Status::Success;
 }
 
@@ -44,8 +58,8 @@ Status RegistryReader::GetDword(const wchar_t* name, DWORD& out) const {
     std::vector<BYTE> buf;
     Status s = ReadRaw(key_.get(), name, REG_DWORD, buf);
     if (s != Status::Success) return s;
-    if (buf.size() < sizeof(DWORD)) return Status::Error;
-    out = *reinterpret_cast<const DWORD*>(buf.data());
+    if (buf.size() != sizeof(DWORD)) return Status::Error;
+    std::memcpy(&out, buf.data(), sizeof(out));
     return Status::Success;
 }
 
@@ -53,8 +67,8 @@ Status RegistryReader::GetQword(const wchar_t* name, unsigned long long& out) co
     std::vector<BYTE> buf;
     Status s = ReadRaw(key_.get(), name, REG_QWORD, buf);
     if (s != Status::Success) return s;
-    if (buf.size() < sizeof(unsigned long long)) return Status::Error;
-    out = *reinterpret_cast<const unsigned long long*>(buf.data());
+    if (buf.size() != sizeof(unsigned long long)) return Status::Error;
+    std::memcpy(&out, buf.data(), sizeof(out));
     return Status::Success;
 }
 
@@ -70,13 +84,17 @@ Status RegistryReader::GetMultiSz(const wchar_t* name, std::vector<std::wstring>
     std::vector<BYTE> buf;
     Status s = ReadRaw(key_.get(), name, REG_MULTI_SZ, buf);
     if (s != Status::Success) return s;
-    const wchar_t* p = (const wchar_t*)buf.data();
-    const wchar_t* end = p + buf.size() / sizeof(wchar_t);
-    while (p < end && *p) {
-        std::wstring s2 = p;
-        out.push_back(std::move(s2));
-        p += out.back().size() + 1;
+    if (buf.size() % sizeof(wchar_t)) return Status::Error;
+    std::wstring data(buf.size() / sizeof(wchar_t), L'\0');
+    if (!buf.empty()) std::memcpy(data.data(), buf.data(), buf.size());
+    std::vector<std::wstring> values;
+    for (size_t start = 0; start < data.size() && data[start];) {
+        const size_t end = data.find(L'\0', start);
+        if (end == std::wstring::npos) return Status::Error;
+        values.emplace_back(data, start, end - start);
+        start = end + 1;
     }
+    out = std::move(values);
     return Status::Success;
 }
 
@@ -85,6 +103,7 @@ Status RegistryReader::GetBinary(const wchar_t* name, std::vector<BYTE>& out) co
 }
 
 Status RegistryReader::EnumValues(std::vector<std::pair<std::wstring, DWORD>>& out) const {
+    out.clear();
     if (!key_.valid()) return Status::Error;
     DWORD idx = 0;
     for (;;) {
@@ -98,7 +117,6 @@ Status RegistryReader::EnumValues(std::vector<std::pair<std::wstring, DWORD>>& o
             return Status::Error;
         }
         std::wstring n(name, nameLen);
-        if (n.empty()) n = L"(Default)";
         out.emplace_back(std::move(n), type);
         ++idx;
     }

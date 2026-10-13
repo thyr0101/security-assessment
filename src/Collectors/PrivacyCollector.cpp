@@ -44,26 +44,32 @@ std::vector<PrivacyFinding> CollectPrivacyFindings() {
     }
 
     // Location
-    if (auto v = RegReadDword(HKEY_LOCAL_MACHINE,
+    if (auto v = RegReadString(
+        HKEY_LOCAL_MACHINE,
         L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\location",
-        L"Value")) {
-        out.push_back(Info(L"Location services", *v ? L"Allowed" : L"Denied",
-            L"Global location access policy.", Category::Privacy));
+        L"Value",
+        KEY_WOW64_64KEY)) {
+
+        out.push_back(Info(
+            L"Location Services",
+            *v,
+            L"Global location access policy.",
+            Category::Privacy));
     }
 
     // Camera (per-user)
-    if (auto v = RegReadDword(HKEY_CURRENT_USER,
+    if (auto v = RegReadString(HKEY_CURRENT_USER,
         L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\webcam",
         L"Value")) {
-        out.push_back(Info(L"Camera access", *v ? L"Allowed" : L"Denied",
+        out.push_back(Info(L"Camera access", *v,
             L"Per-user camera access policy.", Category::Privacy));
     }
 
     // Microphone
-    if (auto v = RegReadDword(HKEY_CURRENT_USER,
+    if (auto v = RegReadString(HKEY_CURRENT_USER,
         L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\microphone",
         L"Value")) {
-        out.push_back(Info(L"Microphone access", *v ? L"Allowed" : L"Denied",
+        out.push_back(Info(L"Microphone access", *v,
             L"Per-user microphone access policy.", Category::Privacy));
     }
 
@@ -75,7 +81,16 @@ std::vector<PrivacyFinding> CollectPrivacyFindings() {
             L"Controls whether Windows publishes activity history.", Category::Privacy));
     }
 
-    // Windows Update delivery optimization (P2P) — informational only
+    // Remote assistance status 
+    if (auto v = RegReadDword(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\Remote Assistance", L"fAllowToGetHelp")) {
+        out.push_back(Info(L"Remote Assistance",
+            *v ? L"Allowed" : L"Disallowed",
+            L"Controls whether Remote Assistance invitations are allowed.",
+            Category::Privacy));
+    }
+
+    
     if (auto v = RegReadDword(HKEY_LOCAL_MACHINE,
         L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\DeliveryOptimization\\Config",
         L"DODownloadMode")) {

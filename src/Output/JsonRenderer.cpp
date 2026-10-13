@@ -1,11 +1,12 @@
 #include "JsonRenderer.h"
 #include "../Utilities.h"
 #include <sstream>
+#include <cstdio>
+#include <locale>
 
 namespace sa {
 
-static std::string Esc(const std::wstring& w) {
-    std::string s = WideToUtf8(w);
+static std::string Esc(const std::string& s) {
     std::string o; o.reserve(s.size() + 8);
     for (char c : s) {
         switch (c) {
@@ -26,9 +27,9 @@ static std::string Esc(const std::wstring& w) {
     }
     return o;
 }
-static std::string Q(const std::wstring& w) { return "\"" + Esc(w) + "\""; }
+static std::string Q(const std::string& s) { return "\"" + Esc(s) + "\""; }
+static std::string Q(const std::wstring& w) { return Q(WideToUtf8(w)); }
 static std::string B(bool b) { return b ? "true" : "false"; }
-static std::string N(unsigned long long v) { return std::to_string(v); }
 static std::string TriS(Tri t) {
     switch (t) { case Tri::Yes: return "\"Yes\""; case Tri::No: return "\"No\"";
                  case Tri::NotApplicable: return "\"N/A\""; default: return "\"Unknown\""; }
@@ -37,6 +38,7 @@ static std::string StatusS(Status s) { return "\"" + std::string(WideToUtf8(ToW(
 
 std::string RenderJson(const AssessmentResult& r) {
     std::ostringstream o;
+    o.imbue(std::locale::classic());
     o << "{";
 
     // system
@@ -51,6 +53,7 @@ std::string RenderJson(const AssessmentResult& r) {
       << "\"timeZone\":"       << Q(r.os.timeZone)        << ","
       << "\"locale\":"         << Q(r.os.locale)          << ","
       << "\"uptimeSeconds\":"  << r.os.uptimeSeconds
+      << ",\"status\":" << StatusS(r.os.status)
       << "},";
 
     // hardware
@@ -62,6 +65,7 @@ std::string RenderJson(const AssessmentResult& r) {
       <<   "\"physicalCores\":" << r.cpu.physicalCores << ","
       <<   "\"processorGroups\":" << r.cpu.processorGroups << ","
       <<   "\"maxMhz\":" << r.cpu.maxMhz << ","
+      <<   "\"status\":" << StatusS(r.cpu.status) << ","
       <<   "\"features\":{"
       <<     "\"sse\":" << B(r.cpu.sse) << ",\"sse2\":" << B(r.cpu.sse2)
               << ",\"sse3\":" << B(r.cpu.sse3) << ",\"ssse3\":" << B(r.cpu.ssse3)
@@ -76,6 +80,7 @@ std::string RenderJson(const AssessmentResult& r) {
       <<   "\"totalBytes\":" << r.memory.totalBytes << ","
       <<   "\"availableBytes\":" << r.memory.availableBytes << ","
       <<   "\"loadPercent\":" << r.memory.loadPercent << ","
+      <<   "\"status\":" << StatusS(r.memory.status) << ","
       <<   "\"modules\":[";
     for (size_t i = 0; i < r.memory.modules.size(); ++i) {
         auto& m = r.memory.modules[i];
@@ -98,21 +103,28 @@ std::string RenderJson(const AssessmentResult& r) {
       <<   "\"ready\":" << B(r.security.tpm.ready) << ","
       <<   "\"specVersion\":" << Q(r.security.tpm.specVersion) << ","
       <<   "\"manufacturerId\":" << Q(r.security.tpm.manufacturerId)
+      <<   ",\"status\":" << StatusS(r.security.tpm.status)
       << "},"
       << "\"secureBoot\":{"
       <<   "\"firmwareIsUefi\":" << TriS(r.security.secureBoot.firmwareIsUefi) << ","
       <<   "\"enabled\":" << TriS(r.security.secureBoot.enabled)
+      <<   ",\"status\":" << StatusS(r.security.secureBoot.status)
       << "},"
       << "\"virtualization\":{"
       <<   "\"vbsEnabled\":" << B(r.security.virt.vbsEnabled) << ","
       <<   "\"hvciEnabled\":" << B(r.security.virt.hvciEnabled) << ","
       <<   "\"credentialGuardRunning\":" << B(r.security.virt.credentialGuardRunning)
+      <<   ",\"hvciConfigured\":" << TriS(r.security.virt.hvciConfigured)
+      <<   ",\"runningServicesKnown\":" << B(r.security.virt.runningServicesKnown)
+      <<   ",\"status\":" << StatusS(r.security.virt.status)
       << "},"
       << "\"uac\":{"
       <<   "\"enabled\":" << B(r.security.uac.enabled)
+      <<   ",\"status\":" << StatusS(r.security.uac.status)
       << "},"
       << "\"smartAppControl\":"
       <<   "\"" << WideToUtf8(ToW(r.security.smartAppControlState)) << "\","
+      << "\"smartAppControlEvaluation\":" << B(r.security.smartAppControlEvaluation) << ","
       << "\"elevated\":" << B(r.security.isElevated)
       << "},";
 
@@ -130,11 +142,14 @@ std::string RenderJson(const AssessmentResult& r) {
       << "\"amEngineVersion\":" << Q(r.defender.amEngineVersion) << ","
       << "\"antivirusSignatureVersion\":" << Q(r.defender.antivirusSignatureVersion) << ","
       << "\"status\":" << StatusS(r.defender.status)
+      << ",\"reason\":" << Q(r.defender.reason)
       << "},";
 
     // firewall
     o << "\"firewall\":{"
+      << "\"status\":" << StatusS(r.firewall.status) << ","
       << "\"serviceRunning\":" << B(r.firewall.serviceRunning) << ","
+      << "\"serviceStatus\":" << StatusS(r.firewall.serviceStatus) << ","
       << "\"profiles\":[";
     for (size_t i = 0; i < r.firewall.profiles.size(); ++i) {
         auto& p = r.firewall.profiles[i];
@@ -142,12 +157,14 @@ std::string RenderJson(const AssessmentResult& r) {
         o << "{\"name\":" << Q(p.name)
           << ",\"enabled\":" << B(p.enabled)
           << ",\"defaultInbound\":" << p.defaultInbound
-          << ",\"defaultOutbound\":" << p.defaultOutbound << "}";
+          << ",\"defaultOutbound\":" << p.defaultOutbound
+          << ",\"status\":" << StatusS(p.status) << "}";
     }
     o << "]},";
 
     // storage
     o << "\"storage\":{"
+      << "\"status\":" << StatusS(r.storage.status) << ","
       << "\"disks\":[";
     for (size_t i = 0; i < r.storage.disks.size(); ++i) {
         auto& d = r.storage.disks[i];
@@ -171,6 +188,8 @@ std::string RenderJson(const AssessmentResult& r) {
             << ",\"freeBytes\":" << v.freeBytes
             << ",\"driveType\":" << Q(v.driveType)
             << ",\"bitLockerState\":" << Q(v.bitLockerState)
+            << ",\"bitLockerStatus\":" << StatusS(v.bitLockerStatus)
+            << ",\"bitLockerNote\":" << Q(v.bitLockerNote)
             << ",\"encryptionMethod\":" << Q(v.encryptionMethod)
             << ",\"protectionMethod\":" << Q(v.protectionMethod)
             << ",\"encryptionPercentage\":" << Q(v.encryptionPercentage)
@@ -178,7 +197,7 @@ std::string RenderJson(const AssessmentResult& r) {
     }
     o << "]},";
     // network
-    o << "\"network\":{\"adapters\":[";
+    o << "\"network\":{\"status\":" << StatusS(r.network.status) << ",\"adapters\":[";
     for (size_t i = 0; i < r.network.adapters.size(); ++i) {
         auto& a = r.network.adapters[i];
         if (i) o << ",";
@@ -208,7 +227,8 @@ std::string RenderJson(const AssessmentResult& r) {
         o << "{\"name\":" << Q(s.name)
           << ",\"displayName\":" << Q(s.displayName)
           << ",\"state\":" << Q(s.state)
-          << ",\"startType\":" << Q(s.startType) << "}";
+          << ",\"startType\":" << Q(s.startType)
+          << ",\"status\":" << StatusS(s.status) << "}";
     }
     o << "],";
 
@@ -219,6 +239,7 @@ std::string RenderJson(const AssessmentResult& r) {
         if (i) o << ",";
         o << "{\"name\":" << Q(a.name)
           << ",\"installed\":" << B(a.installed)
+          << ",\"status\":" << StatusS(a.status)
           << ",\"apps\":[";
         for (size_t j = 0; j < a.apps.size(); ++j) {
             auto& app = a.apps[j];
@@ -299,17 +320,17 @@ std::string RenderJson(const AssessmentResult& r) {
     for (size_t i = 0; i < r.score.rules.size(); ++i) {
         auto& s = r.score.rules[i];
         if (i) o << ",";
-        o << "{\"id\":\"" << s.id << "\""
-          << ",\"description\":\"" << s.description << "\""
+        o << "{\"id\":" << Q(s.id)
+          << ",\"description\":" << Q(s.description)
           << ",\"maxPoints\":" << s.maxPoints
           << ",\"awardedPoints\":" << s.awardedPoints
-          << ",\"category\":\"" << s.category << "\""
-          << ",\"state\":\"" << s.state << "\""
-          << ",\"reason\":\"" << s.reason << "\""
+          << ",\"category\":" << Q(s.category)
+          << ",\"state\":" << Q(s.state)
+          << ",\"reason\":" << Q(s.reason)
           << "}";
     }
     o << "]}}";
     return o.str();
 }
 
-} // namespace sa
+} // namespace sa

@@ -1,6 +1,9 @@
 #include "WmiHelper.h"
 #include <comdef.h>          // <-- _bstr_t
 #include <oleauto.h>
+#include <wrl/client.h>
+#include <cerrno>
+#include <cwctype>
 
 #pragma comment(lib, "wbemuuid.lib")
 #pragma comment(lib, "ole32.lib")
@@ -21,6 +24,7 @@ namespace sa {
     }
 
     Status WmiConnection::Connect(const wchar_t* ns, std::wstring* reason) {
+        if (reason) reason->clear();
         if (svc_) { svc_->Release(); svc_ = nullptr; }
         if (loc_) { loc_->Release(); loc_ = nullptr; }
 
@@ -48,6 +52,7 @@ namespace sa {
             nullptr, EOAC_NONE);
         if (FAILED(hr)) {
             if (reason) *reason = L"CoSetProxyBlanket failed " + HrText(hr);
+            svc_->Release(); svc_ = nullptr;
             return Status::Error;
         }
         return Status::Success;
@@ -58,45 +63,65 @@ namespace sa {
         std::wstring* reason) {
         if (!svc_) { if (reason) *reason = L"not connected"; return Status::Error; }
 
-        IEnumWbemClassObject* en = nullptr;
+        if (reason) reason->clear();
+        Microsoft::WRL::ComPtr<IEnumWbemClassObject> en;
         _bstr_t lang(L"WQL");
         _bstr_t query(wql);
         HRESULT hr = svc_->ExecQuery(lang, query,
             WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY,
-            nullptr, &en);
+            nullptr, en.GetAddressOf());
         if (FAILED(hr) || !en) {
             if (reason) *reason = L"ExecQuery failed " + HrText(hr);
-            return Status::Unavailable;
+            return hr == E_ACCESSDENIED || hr == static_cast<HRESULT>(WBEM_E_ACCESS_DENIED)
+                ? Status::AccessDenied : Status::Unavailable;
         }
 
         // A provider that has to start up (Defender, for one) can take longer than
         // a short timeout to return its first row. WBEM_S_TIMEDOUT is a *success*
         // code with zero rows, so it must be retried, not treated as end-of-data.
-        const size_t before = out.size();
+        std::vector<Microsoft::WRL::ComPtr<IWbemClassObject>> pending;
         HRESULT lastFail = S_OK;
         int timeouts = 0;
         for (;;) {
             IWbemClassObject* objs[8] = {};
             ULONG ret = 0;
             hr = en->Next(2000, 8, objs, &ret);
-            for (ULONG i = 0; i < ret; ++i) out.push_back(objs[i]);
+            Microsoft::WRL::ComPtr<IWbemClassObject> owned[8];
+            for (ULONG i = 0; i < ret; ++i) owned[i].Attach(objs[i]);
+            for (ULONG i = 0; i < ret; ++i) pending.push_back(std::move(owned[i]));
             if (hr == WBEM_S_TIMEDOUT) {
-                if (++timeouts >= 10) break;
+                if (++timeouts >= 10) { lastFail = HRESULT_FROM_WIN32(ERROR_TIMEOUT); break; }
                 continue;
             }
             if (FAILED(hr)) { lastFail = hr; break; }
             if (hr == WBEM_S_FALSE || ret == 0) break;
         }
-        en->Release();
-        if (FAILED(lastFail) && out.size() == before) {
+        if (FAILED(lastFail)) {
             if (reason) *reason = L"query failed " + HrText(lastFail);
-            return Status::Unavailable;
+            return lastFail == E_ACCESSDENIED || lastFail == static_cast<HRESULT>(WBEM_E_ACCESS_DENIED)
+                ? Status::AccessDenied : Status::Unavailable;
         }
+        out.reserve(out.size() + pending.size());
+        for (auto& obj : pending) out.push_back(obj.Detach());
         return Status::Success;
     }
 
+    static bool ParseUInt(const wchar_t* text, unsigned long long& out) {
+        if (!text) return false;
+        while (iswspace(*text)) ++text;
+        if (!*text || *text == L'-') return false;
+        wchar_t* end = nullptr;
+        errno = 0;
+        const auto value = wcstoull(text, &end, 10);
+        if (errno == ERANGE || end == text) return false;
+        while (iswspace(*end)) ++end;
+        if (*end) return false;
+        out = value;
+        return true;
+    }
+
     bool WmiGetString(IWbemClassObject* o, const wchar_t* name, std::wstring& out) {
-        VARIANT v; ::VariantInit(&v);
+        _variant_t v;
         if (FAILED(o->Get(name, 0, &v, nullptr, nullptr))) return false;
         bool ok = false;
         if (v.vt == VT_BSTR && v.bstrVal) {
@@ -106,13 +131,10 @@ namespace sa {
         else if (v.vt == VT_NULL || v.vt == VT_EMPTY) {
             out.clear(); ok = true;
         }
-        ::VariantClear(&v);
         return ok;
     }
 
-    bool WmiGetUInt(IWbemClassObject* o, const wchar_t* name, unsigned long long& out) {
-        VARIANT v; ::VariantInit(&v);
-        if (FAILED(o->Get(name, 0, &v, nullptr, nullptr))) return false;
+    static bool VariantUInt(const VARIANT& v, unsigned long long& out) {
         bool ok = false;
         switch (v.vt) {
         // Read the member that matches the VARIANT type; reading ulVal for a
@@ -126,60 +148,60 @@ namespace sa {
         case VT_I8:  out = static_cast<unsigned long long>(v.llVal); ok = true; break;
         case VT_UI8: out = v.ullVal;                                 ok = true; break;
         case VT_BSTR:
-            if (v.bstrVal) { out = wcstoull(v.bstrVal, nullptr, 10); ok = true; }
+            ok = ParseUInt(v.bstrVal, out);
             break;
         default: break;
         }
-        ::VariantClear(&v);
         return ok;
+    }
+
+    bool WmiGetUInt(IWbemClassObject* o, const wchar_t* name, unsigned long long& out) {
+        _variant_t v;
+        return SUCCEEDED(o->Get(name, 0, &v, nullptr, nullptr)) && VariantUInt(v, out);
     }
 
     bool WmiGetUIntArray(IWbemClassObject* o, const wchar_t* name,
                          std::vector<unsigned long long>& out) {
         out.clear();
-        VARIANT v; ::VariantInit(&v);
+        _variant_t v;
         if (FAILED(o->Get(name, 0, &v, nullptr, nullptr))) return false;
         bool ok = false;
-        if (v.vt == VT_NULL || v.vt == VT_EMPTY) {
-            ok = true;                              // property exists, no elements
-        }
-        else if ((v.vt & VT_ARRAY) && v.parray && ::SafeArrayGetDim(v.parray) == 1) {
+        if ((v.vt & VT_ARRAY) && !(v.vt & VT_BYREF) && v.parray && ::SafeArrayGetDim(v.parray) == 1) {
             SAFEARRAY* arr = v.parray;
             const VARTYPE et = static_cast<VARTYPE>(v.vt & VT_TYPEMASK);
             LONG lb = 0, ub = -1;
             if (SUCCEEDED(::SafeArrayGetLBound(arr, 1, &lb)) &&
                 SUCCEEDED(::SafeArrayGetUBound(arr, 1, &ub))) {
-                ok = true;
-                for (LONG i = lb; i <= ub; ++i) {
-                    switch (et) {
-                    case VT_UI1: { BYTE x = 0;   if (SUCCEEDED(::SafeArrayGetElement(arr, &i, &x))) out.push_back(x); break; }
-                    case VT_I2:  { SHORT x = 0;  if (SUCCEEDED(::SafeArrayGetElement(arr, &i, &x))) out.push_back(static_cast<unsigned short>(x)); break; }
-                    case VT_UI2: { USHORT x = 0; if (SUCCEEDED(::SafeArrayGetElement(arr, &i, &x))) out.push_back(x); break; }
-                    case VT_I4:  { LONG x = 0;   if (SUCCEEDED(::SafeArrayGetElement(arr, &i, &x))) out.push_back(static_cast<ULONG>(x)); break; }
-                    case VT_UI4: { ULONG x = 0;  if (SUCCEEDED(::SafeArrayGetElement(arr, &i, &x))) out.push_back(x); break; }
-                    case VT_BSTR: {
-                        BSTR x = nullptr;
-                        if (SUCCEEDED(::SafeArrayGetElement(arr, &i, &x)) && x) out.push_back(wcstoull(x, nullptr, 10));
-                        if (x) ::SysFreeString(x);
-                        break;
-                    }
-                    default: break;
-                    }
+                switch (et) {
+                case VT_I1: case VT_UI1: case VT_I2: case VT_UI2:
+                case VT_I4: case VT_UI4: case VT_I8: case VT_UI8: case VT_BSTR: break;
+                default: return false;
                 }
+                std::vector<unsigned long long> values;
+                for (LONGLONG index = lb; index <= ub; ++index) {
+                    LONG i = static_cast<LONG>(index);
+                    _variant_t item;
+                    item.vt = et;
+                    // All supported scalar members share the VARIANT union's address.
+                    if (FAILED(::SafeArrayGetElement(arr, &i, &item.bVal))) return false;
+                    unsigned long long value = 0;
+                    if (!VariantUInt(item, value)) return false;
+                    values.push_back(value);
+                }
+                out = std::move(values);
+                ok = true;
             }
         }
-        ::VariantClear(&v);
         return ok;
     }
 
     bool WmiGetBool(IWbemClassObject* o, const wchar_t* name, bool& out) {
-        VARIANT v; ::VariantInit(&v);
+        _variant_t v;
         if (FAILED(o->Get(name, 0, &v, nullptr, nullptr))) return false;
         bool ok = false;
         if (v.vt == VT_BOOL) { out = (v.boolVal != VARIANT_FALSE); ok = true; }
         else if (v.vt == VT_I4 || v.vt == VT_UI4) { out = (v.ulVal != 0); ok = true; }
-        ::VariantClear(&v);
         return ok;
     }
 
-} // namespace sa
+} // namespace sa

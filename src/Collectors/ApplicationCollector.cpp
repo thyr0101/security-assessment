@@ -42,7 +42,7 @@ namespace sa {
             {
                 L"Privacy Utilities",
                 {
-                    L"%ProgramFiles%\\Proton\\VPN\\v*\\ProtonVPN.Client.exe" //Proton VPN
+                    L"%ProgramFiles%\\Proton\\VPN\\v*\\ProtonVPN.Client.exe", //Proton VPN
                     L"%ProgramFiles%\\VS Revo Group\\Revo Uninstaller Pro\\RevoUninPro.exe" // Revo Uninstaller
                 }
             }

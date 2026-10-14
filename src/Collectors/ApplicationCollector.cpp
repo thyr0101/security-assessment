@@ -35,8 +35,7 @@ namespace sa {
                 L"Messenger(s)",
                 {
                     L"%LOCALAPPDATA%\\Programs\\signal-desktop\\Signal.exe", // Signal
-                    L"%LOCALAPPDATA%\\Discord\\discord.exe",
-                    L"%LOCALAPPDATA%\\Discord\\app-*\\Discord.exe", // Versioned installs
+                    L"%LOCALAPPDATA%\\Discord\\app-*\\Discord.exe", // Discord
                 }
             },
             {

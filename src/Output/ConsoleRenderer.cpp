@@ -30,6 +30,7 @@ const wchar_t* Red()  { return K(L"\x1b[91m"); }
 const wchar_t* Grn()  { return K(L"\x1b[92m"); }
 const wchar_t* Yel()  { return K(L"\x1b[93m"); }
 const wchar_t* Cyn()  { return K(L"\x1b[96m"); }
+const wchar_t* Blu()  { return K(L"\x1b[94m"); }
 const wchar_t* Wht()  { return K(L"\x1b[97m"); }
 
 // ---- glyphs: Unicode on a color console, ASCII otherwise (safe for log files) ----
@@ -187,18 +188,18 @@ void RenderConsole(const AssessmentResult& r) {
     // ------------------------------------------------------------ System
     Section(L"System");
     KV(L"OS", r.os.productName + L" (" + r.os.displayVersion + L")");
-    KV(L"Build", Num(r.os.build) + L"." + Num(r.os.ubr));
-    KV(L"Architecture", r.os.architecture);
+    KV(L"Build", Num(r.os.build) + L"." + Num(r.os.ubr), Cyn());
+    KV(L"Architecture", r.os.architecture, Cyn());
     KV(L"Computer", r.os.computerName);
     KV(L"User", r.os.userName);
     KV(L"CPU", r.cpu.brand);
-    KV(L"Cores / Logical", Num(r.cpu.physicalCores) + L" / " + Num(r.cpu.logicalProcessors));
+    KV(L"Cores / Logical", Num(r.cpu.physicalCores) + L" / " + Num(r.cpu.logicalProcessors), Cyn());
     KV(L"RAM", FormatBytes(r.memory.totalBytes) + L"   (available " +
-                   FormatBytes(r.memory.availableBytes) + L")");
+                   FormatBytes(r.memory.availableBytes) + L")", Cyn());
     KV(L"Elevated", r.security.isElevated ? L"Yes" : L"No",
        r.security.isElevated ? Grn() : Yel());
     KV(L"Uptime", Num(r.os.uptimeSeconds / 3600) + L"h " +
-                      Num((r.os.uptimeSeconds % 3600) / 60) + L"m");
+                      Num((r.os.uptimeSeconds % 3600) / 60) + L"m", Cyn());
     KV(L"Timezone", r.os.timeZone);
     KV(L"Locale", r.os.locale);
 
@@ -249,8 +250,8 @@ void RenderConsole(const AssessmentResult& r) {
         defenderFlag(L"Download scanning", r.defender.ioav, r.defender.ioavStatus);
         defenderFlag(L"Cloud Protection", r.defender.cloudProtection, r.defender.cloudProtectionStatus);
         defenderFlag(L"Tamper Protection", r.defender.tamperProtection, r.defender.tamperProtectionStatus);
-        KV(L"Engine Version", r.defender.amEngineVersion);
-        KV(L"Signatures Version", r.defender.antivirusSignatureVersion);
+        KV(L"Engine Version", r.defender.amEngineVersion, Cyn());
+        KV(L"Signatures Version", r.defender.antivirusSignatureVersion, Cyn());
     }
     if (HasThirdPartyAntivirus(r.antivirus)) {
         const Tri periodic = r.defender.periodicScanning;
@@ -291,9 +292,6 @@ void RenderConsole(const AssessmentResult& r) {
     Section(L"Windows Update");
     const auto& update = r.windowsUpdate;
     const bool pendingKnown = update.pendingStatus == Status::Success;
-    KV(L"Update source", L"Windows' local update cache", Dim());
-    KV(L"Last search (UTC)", update.lastSearchUtc.empty() ? L"Unknown" : update.lastSearchUtc);
-    KV(L"Restart required", ToW(update.rebootRequired), update.rebootRequired == Tri::Yes ? Yel() : Wht());
     SubHeader(L"Pending Updates", update.updates.empty() ? (pendingKnown ? L"(None)" : L"(Unknown)")
         : L"(" + Num(update.updates.size()) + (pendingKnown ? L")" : L" listed; incomplete)"),
         pendingKnown ? Dim() : Yel());
@@ -310,7 +308,7 @@ void RenderConsole(const AssessmentResult& r) {
                 products += product;
             }
             out() << L"    " << Dim() << branch << GTee() << Rst() << L" "
-                  << Lbl() << L"Products: " << Rst() << products << L"\n";
+                  << Lbl() << L"Products: " << Dim() << products << Rst() << L"\n";
         }
         if (!item.kbArticles.empty()) {
             std::wstring articles;
@@ -319,27 +317,23 @@ void RenderConsole(const AssessmentResult& r) {
                 articles += L"KB" + kb;
             }
             out() << L"    " << Dim() << branch << GTee() << Rst() << L" "
-                  << Lbl() << L"Update reference: " << Rst() << articles << L"\n";
+                  << Lbl() << L"Update reference: " << Blu() << articles << Rst() << L"\n";
         }
         out() << L"    " << Dim() << branch << GCorner() << Rst() << L" "
-              << Lbl() << L"Downloaded: " << Rst() << ToW(item.downloaded) << L"\n";
+              << Lbl() << L"Downloaded: " << (item.downloaded == Tri::Unknown ? Yel() : Cyn())
+              << ToW(item.downloaded) << Rst() << L"\n";
     }
     if (!update.pendingReason.empty()) KV(L"Update query", update.pendingReason, Yel());
-    KV(L"Latest installation", update.lastInstallationResult.empty() ? L"Unknown" : update.lastInstallationResult,
-        update.lastInstallationSucceeded == Tri::No ? Red() : Wht());
-    if (!update.lastInstallationTitle.empty()) KV(L"Update name", update.lastInstallationTitle);
-    if (!update.lastInstallationUtc.empty()) KV(L"Installation (UTC)", update.lastInstallationUtc);
     if (!update.lastInstallationError.empty()) KV(L"Installation error", update.lastInstallationError, Yel());
     SubHeader(L"Update Services", update.services.entries.empty() ? L"(Unavailable)" : L"", Dim());
     for (size_t i = 0; i < update.services.entries.size(); ++i) {
         const auto& service = update.services.entries[i];
-        const std::wstring label = service.displayName.empty() || IEquals(service.name, service.displayName)
-            ? service.name : service.name + L" - " + service.displayName;
-        const std::wstring state = service.status == Status::Success ? service.state + L" (" + service.startType + L")"
-            : L"Unknown (" + std::wstring(ToW(service.status)) + L")";
-        const wchar_t* color = service.status != Status::Success ? Yel() : service.startType == L"Disabled" ? Red() : Wht();
         out() << L"    " << Dim() << (i + 1 == update.services.entries.size() ? GCorner() : GTee()) << Rst()
-              << L" " << Wht() << label << Rst() << L"  " << color << L"[" << state << L"]" << Rst() << L"\n";
+              << L" " << Blu() << service.name << Rst();
+        if (!service.displayName.empty() && !IEquals(service.name, service.displayName))
+            out() << Dim() << L" - " << Rst() << Wht() << service.displayName << Rst();
+        out() << L"  " << Dim() << L"[" << Cyn() << (service.state.empty() ? L"Unknown" : service.state)
+              << Dim() << L"]" << Rst() << L"\n";
     }
 
     // ------------------------------------------------------------ Storage
@@ -350,10 +344,10 @@ void RenderConsole(const AssessmentResult& r) {
         const std::wstring totalTxt = FormatBytes(v.totalBytes);
         const size_t sizeCol = 28;                                   // keeps the usage bars aligned
         const size_t shown = 6 + freeTxt.size() + 3 + totalTxt.size(); // " Free " + a + " / " + b
-        out() << L"  " << Bold() << Wht() << PadRight(v.mountPoint, 5) << Rst()
+        out() << L"  " << Bold() << Blu() << PadRight(v.mountPoint, 5) << Rst()
               << Lbl() << PadRight(v.filesystem, 6) << Rst()
-              << L" Free " << Wht() << freeTxt << Rst()
-              << L" / " << Wht() << totalTxt << Rst()
+              << L" Free " << Cyn() << freeTxt << Rst()
+              << L" / " << Cyn() << totalTxt << Rst()
               << std::wstring(sizeCol > shown ? sizeCol - shown : 0, L' ');
         if (v.totalBytes > 0) {
             const unsigned long long freeB = v.freeBytes > v.totalBytes ? v.totalBytes : v.freeBytes;
@@ -380,9 +374,9 @@ void RenderConsole(const AssessmentResult& r) {
     SubHeader(L"Physical Disks", L"", Dim());
     for (auto& d : r.storage.disks) {
         const std::wstring name = d.vendor.empty() ? d.model : d.vendor + L" " + d.model;
-        out() << L"  " << Bold() << Wht() << PadRight(L"Disk" + Num(d.index), 7) << Rst()
+        out() << L"  " << Bold() << Blu() << PadRight(L"Disk" + Num(d.index), 7) << Rst()
               << Wht() << PadRight(name, 26) << Rst()
-              << PadLeft(FormatBytes(d.sizeBytes), 9) << L"   "
+              << Cyn() << PadLeft(FormatBytes(d.sizeBytes), 9) << Rst() << L"   "
               << Cyn() << PadRight(d.busType, 7) << Rst()
               << Lbl() << d.mediaType << Rst() << L"\n";
     }
@@ -404,7 +398,7 @@ void RenderConsole(const AssessmentResult& r) {
                 const auto& loc = app.locations[i];
                 const bool lastLoc = (i + 1 == app.locations.size());
                 out() << L"        " << Dim() << (lastLoc ? GCorner() : GTee()) << Rst() << L" "
-                      << Lbl() << loc.path << Rst();
+                      << Dim() << loc.path << Rst();
                 // Only mention a version here when it differs from the one shown above.
                 if (!loc.version.empty() && loc.version != app.version)
                     out() << L"  " << Dim() << L"(" << loc.version << L")" << Rst();
@@ -449,7 +443,7 @@ void RenderConsole(const AssessmentResult& r) {
     // ------------------------------------------------------------ Privacy
     Section(L"Privacy (informational)");
     for (auto& p : r.privacyFindings)
-        KV(p.name.c_str(), p.value);
+        KV(p.name.c_str(), p.value, Cyn());
 
     // ------------------------------------------------------------ Score
     out() << L"\n";
@@ -491,10 +485,11 @@ void RenderConsole(const AssessmentResult& r) {
         for (auto& rl : r.score.rules) {
             if (rl.maxPoints == 0) continue;
             if (rl.category != category) continue;
-            const wchar_t* c = OutcomeColor(rl.awardedPoints, rl.maxPoints);
+            const wchar_t* c = rl.state == "Unknown" || rl.state == "Unavailable" ? Yel()
+                : OutcomeColor(rl.awardedPoints, rl.maxPoints);
             out() << L"    " << c << PadLeft(Num(rl.awardedPoints), 3) << Rst() << Dim() << L" / " << Rst()
                   << Lbl() << PadLeft(Num(rl.maxPoints), 3) << Rst() << L"   "
-                  << PadRight(Utf8ToWide(rl.description), descriptionWidth)
+                  << Wht() << PadRight(Utf8ToWide(rl.description), descriptionWidth) << Rst()
                   << c << L"[" << Utf8ToWide(rl.state) << L"]" << Rst() << L"\n";
         }
     }

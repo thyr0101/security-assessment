@@ -292,7 +292,7 @@ static void TestWindowsUpdate() {
     try { RenderConsole(result); } catch (...) { std::wcout.rdbuf(old); throw; }
     std::wcout.rdbuf(old);
     const size_t pendingStart = captured.str().find(L"Pending Updates  (None)");
-    const size_t pendingEnd = captured.str().find(L"Latest installation", pendingStart);
+    const size_t pendingEnd = captured.str().find(L"Update Services", pendingStart);
     Check(pendingStart != std::wstring::npos && pendingEnd != std::wstring::npos &&
           captured.str().substr(pendingStart, pendingEnd - pendingStart).find(L"|-") == std::wstring::npos &&
           captured.str().substr(pendingStart, pendingEnd - pendingStart).find(L"`-") == std::wstring::npos,

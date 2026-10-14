@@ -100,6 +100,8 @@ The report uses the native Windows Update Agent COM API to read locally cached p
 
 Seven related services appear in an `Update Services` tree, each prefixed with its canonical service key name resolved through the Service Control Manager, followed by its display name and state. If the name mapping cannot be read, the requested service name is retained as a fallback. The update search stays offline and has a 45-second completion timeout; no updates are downloaded or installed. Cached results reflect Windows' last scan, so they can differ from a fresh online check.
 
+The console uses blue for service identifiers, white for display names, and cyan for service states; startup types are omitted. Update source, search time, restart status, and latest-installation details are hidden from the console and remain available in JSON. Colors distinguish identifiers, values, and secondary details throughout the report. Redirected output and `NO_COLOR` remain plain text.
+
 | Check | Maximum | Scoring |
 | --- | ---: | --- |
 | Windows update details available | 30 | Installed update revision can be read; this does not prove Windows is up to date. |

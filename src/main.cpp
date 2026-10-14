@@ -9,6 +9,7 @@
 #include "Collectors/HardwareCollector.h"
 #include "Collectors/SecurityCollector.h"
 #include "Collectors/DefenderCollector.h"
+#include "Collectors/AntivirusCollector.h"
 #include "Collectors/FirewallCollector.h"
 #include "Collectors/NetworkCollector.h"
 #include "Collectors/StorageCollector.h"
@@ -64,6 +65,8 @@ int wmain(int argc, wchar_t** argv) {
     catch (...) { r.security.tpm.status = Status::Error; }
     try { r.defender = CollectDefenderInfo(); }
     catch (...) { r.defender.status = Status::Error; }
+    try { r.antivirus = CollectAntivirusInfo(); }
+    catch (...) { r.antivirus.status = Status::Error; }
     try { r.firewall = CollectFirewallInfo(); }
     catch (...) { r.firewall.status = Status::Error; }
     try { r.storage = CollectStorageInfo(); }

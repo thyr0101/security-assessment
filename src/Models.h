@@ -155,11 +155,46 @@ struct DefenderInfo {
     std::wstring lastQuickScan;
     std::wstring lastFullScan;
     std::wstring quickScanAge;
+    std::wstring amRunningMode;
+    Tri periodicScanning = Tri::Unknown; // Informational only; never used for scoring.
     unsigned threatsCount = 0;      // active threats; only meaningful if threatsKnown
     bool threatsKnown = false;
     Status status = Status::Error;
     std::wstring reason;
 };
+
+enum class AntivirusState { Unknown, Enabled, Disabled, Snoozed, Expired };
+
+inline const wchar_t* ToW(AntivirusState state) {
+    switch (state) {
+    case AntivirusState::Enabled: return L"Enabled";
+    case AntivirusState::Disabled: return L"Disabled";
+    case AntivirusState::Snoozed: return L"Snoozed";
+    case AntivirusState::Expired: return L"Expired";
+    default: return L"Unknown";
+    }
+}
+
+struct AntivirusProduct {
+    std::wstring name;
+    std::wstring id;
+    AntivirusState state = AntivirusState::Unknown;
+    Tri signaturesUpToDate = Tri::Unknown;
+    bool isDefender = false;
+    Status status = Status::Error;
+};
+
+struct AntivirusInfo {
+    std::vector<AntivirusProduct> products;
+    Status status = Status::Error;
+    std::wstring reason;
+};
+
+inline bool HasThirdPartyAntivirus(const AntivirusInfo& info) {
+    for (const auto& product : info.products)
+        if (!product.isDefender) return true;
+    return false;
+}
 
 struct FirewallProfile {
     std::wstring name;
@@ -341,6 +376,9 @@ struct ScoreReport {
     int total = 0;
     int maximum = 1000;
     std::vector<ScoreRuleResult> rules;
+    // Independent /200 product scores, excluded from the overall sum.
+    std::vector<ScoreRuleResult> antivirusScores;
+    bool registeredAntivirusScoring = false;
 };
 
 struct AssessmentResult {
@@ -349,6 +387,7 @@ struct AssessmentResult {
     MemoryInfo memory;
     SecurityInfo security;
     DefenderInfo defender;
+    AntivirusInfo antivirus;
     FirewallInfo firewall;
     StorageInfo storage;
     NetworkInfo network;

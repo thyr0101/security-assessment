@@ -61,6 +61,16 @@ void FillFromServiceAndRegistry(DefenderInfo& d) {
 
 } // namespace
 
+Tri PeriodicScanningFromMode(const std::wstring& mode) {
+    const auto normalized = Trim(mode);
+    // AMRunningMode is read directly from MSFT_MpComputerStatus, without PowerShell.
+    // https://learn.microsoft.com/defender-endpoint/microsoft-defender-antivirus-windows
+    if (IEquals(normalized, L"SxS Passive Mode")) return Tri::Yes;
+    if (IEquals(normalized, L"Normal") || IEquals(normalized, L"Passive Mode") ||
+        IEquals(normalized, L"EDR Block Mode")) return Tri::No;
+    return Tri::Unknown;
+}
+
 DefenderInfo CollectDefenderInfo() {
     DefenderInfo d;
     ComInit ci;
@@ -86,7 +96,7 @@ DefenderInfo CollectDefenderInfo() {
                 if (haveSvc) d.enabled = b;
                 if (WmiGetBool(o, L"AntivirusEnabled", b)) {
                     d.antivirusEnabled = b;
-                    if (!haveSvc) d.enabled = b;
+                    d.enabled = b; // A running Defender service can be passive alongside another AV.
                 }
                 if (WmiGetBool(o, L"AntispywareEnabled", b))        d.antispywareEnabled = b;
                 if (WmiGetBool(o, L"RealTimeProtectionEnabled", b)) d.realTimeProtection = b;
@@ -97,6 +107,8 @@ DefenderInfo CollectDefenderInfo() {
                 WmiGetString(o, L"AMEngineVersion", d.amEngineVersion);
                 WmiGetString(o, L"AMProductVersion", d.amProductVersion);
                 WmiGetString(o, L"AMServiceVersion", d.amServiceVersion);
+                WmiGetString(o, L"AMRunningMode", d.amRunningMode);
+                d.periodicScanning = PeriodicScanningFromMode(d.amRunningMode);
                 WmiGetString(o, L"AntivirusSignatureVersion", d.antivirusSignatureVersion);
                 WmiGetString(o, L"AntivirusSignatureLastUpdated", d.antivirusSignatureLastUpdated);
                 WmiGetString(o, L"QuickScanStartTime", d.lastQuickScan);

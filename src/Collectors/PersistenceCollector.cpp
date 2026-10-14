@@ -216,8 +216,9 @@ ServiceReport CollectSecurityServices() {
             e.state = StateName(ssp.dwCurrentState);
         else e.status = StatusFromWin32(::GetLastError());
         DWORD cfgSz = 0;
-        ::QueryServiceConfigW(svc.get(), nullptr, 0, &cfgSz);
-        if (cfgSz) {
+        const BOOL sizeRead = ::QueryServiceConfigW(svc.get(), nullptr, 0, &cfgSz);
+        const DWORD configError = sizeRead ? ERROR_SUCCESS : ::GetLastError();
+        if (!sizeRead && configError == ERROR_INSUFFICIENT_BUFFER && cfgSz) {
             std::vector<BYTE> buf(cfgSz);
             auto* cfg = (QUERY_SERVICE_CONFIGW*)buf.data();
             if (::QueryServiceConfigW(svc.get(), cfg, cfgSz, &cfgSz)) {
@@ -227,7 +228,7 @@ ServiceReport CollectSecurityServices() {
             }
             else e.status = StatusFromWin32(::GetLastError());
         }
-        else e.status = StatusFromWin32(::GetLastError());
+        else e.status = sizeRead ? Status::Error : StatusFromWin32(configError);
         rep.entries.push_back(std::move(e));
     }
     rep.status = Status::Success;

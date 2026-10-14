@@ -227,16 +227,49 @@ void RenderConsole(const AssessmentResult& r) {
     // ------------------------------------------------------------ Protection
     Section(L"Protection");
     SubHeader(L"Microsoft Defender", L"", Dim());
-    Flag(L"Defender", r.defender.enabled, r.defender.status);
-    Flag(L"Real-Time", r.defender.realTimeProtection, r.defender.status);
-    Flag(L"Behavior Monitoring", r.defender.behaviorMonitor, r.defender.status);
-    Flag(L"IOAV Protection", r.defender.ioav, r.defender.status);
-    Flag(L"Cloud Protection", r.defender.cloudProtection, r.defender.status);
-    Flag(L"Tamper Protection", r.defender.tamperProtection, r.defender.status);
-    KV(L"Engine Version", r.defender.amEngineVersion);
-    KV(L"Signatures Version", r.defender.antivirusSignatureVersion);
+    if (r.score.registeredAntivirusScoring) {
+        KV(L"Defender", r.defender.status == Status::Success
+            ? (r.defender.enabled ? L"Enabled" : L"Inactive") : L"Unknown", Dim());
+        if (!r.defender.amRunningMode.empty()) KV(L"Running mode", r.defender.amRunningMode);
+    } else {
+        Flag(L"Defender", r.defender.enabled, r.defender.status);
+        Flag(L"Real-Time", r.defender.realTimeProtection, r.defender.status);
+        Flag(L"Behavior Monitoring", r.defender.behaviorMonitor, r.defender.status);
+        Flag(L"IOAV Protection", r.defender.ioav, r.defender.status);
+        Flag(L"Cloud Protection", r.defender.cloudProtection, r.defender.status);
+        Flag(L"Tamper Protection", r.defender.tamperProtection, r.defender.status);
+        KV(L"Engine Version", r.defender.amEngineVersion);
+        KV(L"Signatures Version", r.defender.antivirusSignatureVersion);
+    }
+    if (HasThirdPartyAntivirus(r.antivirus)) {
+        const Tri periodic = r.defender.periodicScanning;
+        KV(L"Periodic scanning", periodic == Tri::Yes ? L"Enabled" : periodic == Tri::No ? L"Disabled" : L"Unknown",
+           periodic == Tri::Unknown ? Yel() : Wht());
+        KV(L"Scoring", L"Periodic scanning is informational only", Dim());
+        if (periodic == Tri::Unknown)
+            KV(L"Periodic scan note", L"Defender did not report a recognized running mode.", Yel());
+    }
     if (!r.defender.reason.empty())
         KV(L"Note", r.defender.reason, Yel());
+
+    if (r.score.registeredAntivirusScoring) {
+        SubHeader(L"Registered Antivirus (Windows Security Center)", L"", Dim());
+        for (size_t i = 0; i < r.antivirus.products.size(); ++i) {
+            const auto& av = r.antivirus.products[i];
+            const bool enabled = av.status == Status::Success && av.state == AntivirusState::Enabled;
+            const bool known = av.status == Status::Success && av.state != AntivirusState::Unknown;
+            SubHeader(av.name, known ? ToW(av.state) : L"Unknown", enabled ? Grn() : known ? Red() : Yel());
+            if (i < r.score.antivirusScores.size()) {
+                const auto& score = r.score.antivirusScores[i];
+                KV(L"Antivirus score", Num(score.awardedPoints) + L" / " + Num(score.maxPoints),
+                   OutcomeColor(score.awardedPoints, score.maxPoints));
+            }
+            KV(L"Signatures current", ToW(av.signaturesUpToDate));
+        }
+        KV(L"Overall contribution", L"At most 200 points; product scores are independent.", Dim());
+    }
+    if (r.antivirus.status != Status::Success && !r.antivirus.reason.empty())
+        KV(L"Antivirus query", r.antivirus.reason, Yel());
 
     SubHeader(L"Windows Firewall", L"", Dim());
     for (auto& p : r.firewall.profiles)

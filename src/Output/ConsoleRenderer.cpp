@@ -40,6 +40,7 @@ const wchar_t* GEmpty()  { return g_color ? L"\u2591" : L"."; }
 const wchar_t* GTee()    { return g_color ? L"\u251C\u2500" : L"|-"; }
 const wchar_t* GCorner() { return g_color ? L"\u2514\u2500" : L"`-"; }
 const wchar_t* GBranch() { return g_color ? L"\u2502  " : L"|  "; }
+const wchar_t* GDot()    { return g_color ? L"\u00B7" : L"."; }
 
 std::wostream& out() { return std::wcout; }
 
@@ -93,14 +94,14 @@ void Section(const wchar_t* title) {
 }
 
 void SubHeader(const std::wstring& title, const std::wstring& right, const wchar_t* rightColor) {
-    out() << L"  " << Bold() << Wht() << title << Rst();
+    out() << L"\n  " << Dim() << L"[+] " << Rst() << Bold() << Wht() << title << Rst();
     if (!right.empty()) out() << L"  " << rightColor << right << Rst();
     out() << L"\n";
 }
 
-// "  Label ............ value"
+// Indented facts use a subtle dot; headings and trees show the hierarchy.
 void KV(const wchar_t* label, const std::wstring& value, const wchar_t* color = nullptr) {
-    out() << L"  " << Lbl() << PadRight(std::wstring(label) + L" ", kLabel) << Rst()
+    out() << L"    " << Dim() << GDot() << L" " << Lbl() << PadRight(std::wstring(label) + L" ", kLabel) << Rst()
           << (color ? color : Wht()) << value << Rst() << L"\n";
 }
 
@@ -114,12 +115,12 @@ void Pair(const wchar_t* first, const std::wstring& value, const wchar_t* second
     const size_t cell = (std::max)(kLabel, std::wstring(first).size() + 1) + value.size();
     const size_t secondCell = (std::max)(kLabel, std::wstring(second).size() + 1) + other.size();
     const size_t column = (std::max)(size_t{46}, cell + 3);
-    if (column + secondCell + 2 > width) {
+    if (column + secondCell + 8 > width) {
         KV(first, value, color); KV(second, other, otherColor ? otherColor : color); return;
     }
-    out() << L"  " << Lbl() << PadRight(std::wstring(first) + L" ", kLabel) << Rst()
+    out() << L"    " << Dim() << GDot() << L" " << Lbl() << PadRight(std::wstring(first) + L" ", kLabel) << Rst()
           << (color ? color : Wht()) << value << Rst() << std::wstring(column - cell, L' ')
-          << Lbl() << PadRight(std::wstring(second) + L" ", kLabel) << Rst()
+          << Dim() << GDot() << L" " << Lbl() << PadRight(std::wstring(second) + L" ", kLabel) << Rst()
           << (otherColor ? otherColor : color ? color : Wht()) << other << Rst() << L"\n";
 }
 
@@ -342,22 +343,29 @@ void RenderConsole(const AssessmentResult& r) {
     setting(L"Incoming SMB signing", network.smbServerSigning, L"Required", L"Not required");
     setting(L"Outgoing SMB signing", network.smbClientSigning, L"Required", L"Not required");
     setting(L"SMB guest logons", network.smbGuestLogons, L"Allowed", L"Blocked", false);
+    SubHeader(L"SMB Encryption (informational)", L"", Dim());
     setting(L"Global SMB encryption", network.smbEncryption, L"Enabled", L"Disabled", true, true);
     setting(L"Reject unencrypted SMB", network.smbRejectUnencrypted, L"Yes", L"No", true, true);
     KV(L"Encryption scope", L"Informational server settings; individual shares may also require encryption.", Dim());
 
-    SubHeader(L"Name Resolution & Remote Desktop", L"", Dim());
+    SubHeader(L"Name Resolution", L"", Dim());
     setting(L"LLMNR policy", network.llmnr, L"Allowed", L"Disabled", false);
+    SubHeader(L"Remote Desktop", L"", Dim());
     setting(L"Remote Desktop", network.rdp, L"Enabled", L"Disabled", false, true);
     setting(L"RDP authentication", network.rdpNla, L"NLA required", L"NLA not required");
     KV(L"Configured RDP port", network.rdpPortStatus == Status::Success ? Num(network.rdpPort) : L"Unknown", Cyn());
     KV(L"RDP scope", L"Configuration only; listeners and firewall rules determine actual access.", Dim());
 
-    SubHeader(L"Network Adapters", Num(network.adapters.size()) + L" found", Dim());
+    auto activeAdapter = [](const NetworkAdapterInfo& adapter) {
+        return adapter.up && !adapter.isLoopback && adapter.ifType != L"Loopback";
+    };
+    const auto activeCount = std::count_if(network.adapters.begin(), network.adapters.end(), activeAdapter);
+    SubHeader(L"Active Network Adapters", Num(activeCount) +
+        (network.status == Status::Success ? L" active" : L" listed (incomplete)"), Dim());
+    if (!activeCount && network.status == Status::Success) KV(L"Adapters", L"None", Dim());
     for (const auto& adapter : network.adapters) {
-        SubHeader(adapter.name, adapter.ifType + (adapter.up ? L" / Up" : L" / Down"), adapter.up ? Cyn() : Dim());
-        // Disconnected adapter names stay visible; their full inventory remains in JSON.
-        if (!adapter.up) continue;
+        if (!activeAdapter(adapter)) continue;
+        SubHeader(adapter.name, adapter.ifType + L" / Up", Cyn());
         KV(L"Description", adapter.description, Dim());
         Pair(L"IPv4", join(adapter.ipv4), L"IPv6", join(adapter.ipv6), Cyn());
         Pair(L"Gateway", join(adapter.gateways), L"DNS", join(adapter.dns), Cyn());
@@ -399,9 +407,9 @@ void RenderConsole(const AssessmentResult& r) {
             i = end;
         }
     };
-    endpoints(L"TCP", L"Local TCP Listeners (informational)", network.tcp4Status, network.tcp6Status);
     endpoints(L"UDP", L"UDP Port 69 / TFTP Review (informational)", network.udp4Status, network.udp6Status);
-    KV(L"Listener scope", L"Local bindings do not prove remote reachability or identify the application protocol.", Dim());
+    if (std::any_of(network.endpoints.begin(), network.endpoints.end(), [](const auto& endpoint) { return endpoint.protocol == L"UDP"; }))
+        KV(L"Binding scope", L"Local bindings do not prove remote reachability or identify the application protocol.", Dim());
 
     // ------------------------------------------------------------ Windows Update
     Section(L"Windows Update");
@@ -585,7 +593,7 @@ void RenderConsole(const AssessmentResult& r) {
         if (!group.empty()) SubHeader(group, L"", Dim());
         for (const auto& finding : r.privacyFindings) {
             if (finding.group != group) continue;
-            out() << L"    " << Lbl() << PadRight(finding.name + L" ", 29) << Rst()
+            out() << L"    " << Dim() << GDot() << L" " << Lbl() << PadRight(finding.name + L" ", 29) << Rst()
                   << (finding.status == Status::Success ? Cyn() : finding.status == Status::NotFound ? Dim() : Yel())
                   << finding.value << Rst();
             if (!finding.scope.empty()) out() << Dim() << L"  [" << finding.scope << L"]" << Rst();

@@ -87,6 +87,8 @@ Status RegistryReader::GetMultiSz(const wchar_t* name, std::vector<std::wstring>
     if (buf.size() % sizeof(wchar_t)) return Status::Error;
     std::wstring data(buf.size() / sizeof(wchar_t), L'\0');
     if (!buf.empty()) std::memcpy(data.data(), buf.data(), buf.size());
+    if (data.size() < 2 || data[data.size() - 1] != L'\0' || data[data.size() - 2] != L'\0')
+        return Status::Error;
     std::vector<std::wstring> values;
     for (size_t start = 0; start < data.size() && data[start];) {
         const size_t end = data.find(L'\0', start);
@@ -106,17 +108,18 @@ Status RegistryReader::EnumValues(std::vector<std::pair<std::wstring, DWORD>>& o
     out.clear();
     if (!key_.valid()) return Status::Error;
     DWORD idx = 0;
+    std::vector<wchar_t> name(16384);
     for (;;) {
-        wchar_t name[16384]; DWORD nameLen = _countof(name);
+        DWORD nameLen = static_cast<DWORD>(name.size());
         DWORD type = 0;
-        LSTATUS st = ::RegEnumValueW(key_.get(), idx, name, &nameLen, nullptr, &type, nullptr, nullptr);
+        LSTATUS st = ::RegEnumValueW(key_.get(), idx, name.data(), &nameLen, nullptr, &type, nullptr, nullptr);
         if (st == ERROR_NO_MORE_ITEMS) break;
         if (st == ERROR_MORE_DATA) { ++idx; continue; }
         if (st != ERROR_SUCCESS) {
             if (st == ERROR_ACCESS_DENIED) return Status::AccessDenied;
             return Status::Error;
         }
-        std::wstring n(name, nameLen);
+        std::wstring n(name.data(), nameLen);
         out.emplace_back(std::move(n), type);
         ++idx;
     }

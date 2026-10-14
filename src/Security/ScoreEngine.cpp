@@ -147,7 +147,7 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
                                  S.smartAppControlState == Tri::No ? "Off" : "Unknown",
                                  "Smart App Control not enforcing."));
 
-    // ---- Windows Update (max 100) ----
+    // ---- Windows Update (max 60; pending updates are informational) ----
     // Preserve the existing rule ID while moving it to the new category.
     rep.rules.push_back(O.ubr > 0
         ? Full({ "os.patch", "Windows update details available", 30, Category::WindowsUpdate },
@@ -156,15 +156,14 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
                "Windows update revision could not be read."));
 
     const auto& U = a.windowsUpdate;
-    const R pending{"wu.pending", "Pending Windows updates", 40, Category::WindowsUpdate};
+    const R pending{"wu.pending", "Pending Windows updates", 0, Category::WindowsUpdate};
     if (U.pendingStatus != Status::Success)
         rep.rules.push_back(Zero(pending, "Unknown", "Pending updates could not be read reliably from Windows Update Agent."));
     else {
-        const int points = 40 - 5 * static_cast<int>((std::min)(U.pendingCount, 8u));
-        rep.rules.push_back(Partial(pending, points,
+        rep.rules.push_back(Partial(pending, 0,
             U.pendingCount ? std::to_string(U.pendingCount) + " pending" : "None cached",
             "Local Windows Update cache: " + std::to_string(U.pendingCount) +
-            " non-optional updates pending. Five points deducted per update, up to 40; optional updates are informational."));
+            " non-optional updates pending. Pending and optional updates are informational and do not affect the score."));
     }
     for (const auto& [name, label] : {std::pair{L"wuauserv", "Windows Update service available"},
              std::pair{L"BITS", "Update download service available"},
@@ -316,7 +315,7 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
         rep.rules.push_back(Zero({ "net.svc", "Windows Firewall service", 20, Category::NetworkSecurity }, "Stopped",
                                  "Firewall service not running."));
 
-    // ---- Encryption (max 125) ----
+    // ---- Encryption (max 165) ----
     bool anyBitlockerOn = false, allFixedOn = a.storage.status == Status::Success;
     bool anyBitlockerUnknown = a.storage.status != Status::Success;
     int fixedCount = 0;
@@ -352,9 +351,9 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
                                      : "BitLocker not enabled on any fixed volume."));
 
     rep.rules.push_back(S.tpm.present
-        ? Full({ "enc.tpm", "TPM available to protect keys", 25, Category::Encryption },
+        ? Full({ "enc.tpm", "TPM available to protect keys", 65, Category::Encryption },
                "A TPM security chip is available to store and protect encryption keys.", "Available")
-        : Zero({ "enc.tpm", "TPM available to protect keys", 25, Category::Encryption }, "Absent",
+        : Zero({ "enc.tpm", "TPM available to protect keys", 65, Category::Encryption }, "Absent",
                "No TPM available for key protection."));
 
     // ---- Account Security (max 80) ----

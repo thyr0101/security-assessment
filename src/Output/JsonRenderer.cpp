@@ -77,6 +77,12 @@ std::string RenderJson(const AssessmentResult& r) {
         const auto& item = update.updates[i];
         o << "{\"title\":" << Q(item.title) << ",\"id\":" << Q(item.id)
           << ",\"optional\":" << TriS(item.optional) << ",\"downloaded\":" << TriS(item.downloaded)
+          << ",\"updateType\":" << Q(item.updateType) << ",\"severity\":" << Q(item.severity)
+          << ",\"classifications\":[";
+        for (size_t j = 0; j < item.classifications.size(); ++j) { if (j) o << ","; o << Q(item.classifications[j]); }
+        o << "],\"products\":[";
+        for (size_t j = 0; j < item.products.size(); ++j) { if (j) o << ","; o << Q(item.products[j]); }
+        o << "]"
           << ",\"kbArticles\":[";
         for (size_t j = 0; j < item.kbArticles.size(); ++j) { if (j) o << ","; o << Q(item.kbArticles[j]); }
         o << "]}";

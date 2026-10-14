@@ -294,6 +294,10 @@ struct WindowsUpdateItem {
     std::wstring title;
     std::wstring id;
     std::vector<std::wstring> kbArticles;
+    std::vector<std::wstring> classifications;
+    std::vector<std::wstring> products;
+    std::wstring updateType;
+    std::wstring severity;
     Tri optional = Tri::Unknown;
     Tri downloaded = Tri::Unknown;
 };

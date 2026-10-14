@@ -222,21 +222,21 @@ static void TestWindowsUpdate() {
     for (const auto& rule : score.rules) if (rule.category == "Windows Update") {
         categoryMax += rule.maxPoints; categoryAward += rule.awardedPoints;
     }
-    Check(categoryMax == 100 && categoryAward == 100, "healthy Windows Update receives all 100 points");
-    int previous = 41;
+    Check(categoryMax == 60 && categoryAward == 60, "healthy Windows Update receives all 60 scored points");
+    const int baselineScore = score.total;
     for (unsigned count : {0u, 1u, 2u, 3u, 7u, 8u, 9u, UINT_MAX}) {
         result.windowsUpdate.pendingCount = count;
-        const auto rule = Rule(ComputeScore(result), "wu.pending");
-        Check(rule.awardedPoints == 40 - 5 * static_cast<int>((std::min)(count, 8u)) &&
-              rule.awardedPoints <= previous && rule.awardedPoints >= 0, "pending update penalty is monotonic and bounded");
-        previous = rule.awardedPoints;
+        const auto report = ComputeScore(result);
+        const auto& rule = Rule(report, "wu.pending");
+        Check(rule.awardedPoints == 0 && rule.maxPoints == 0 && report.total == baselineScore,
+              "pending counts through overflow boundaries are informational and never change score");
     }
     result.windowsUpdate.pendingCount = 1;
     result.windowsUpdate.optionalCount = 12;
-    Check(Rule(ComputeScore(result), "wu.pending").awardedPoints == 35, "one pending update earns 35/40; optional updates do not reduce score");
+    Check(ComputeScore(result).total == baselineScore, "pending and optional updates do not reduce score");
     result.windowsUpdate.pendingStatus = Status::AccessDenied;
     Check(Rule(ComputeScore(result), "wu.pending").state == "Unknown" &&
-          Rule(ComputeScore(result), "wu.pending").awardedPoints == 0, "failed pending search does not masquerade as no updates");
+          ComputeScore(result).total == baselineScore, "failed pending search stays unknown without changing score");
     result.windowsUpdate.pendingStatus = Status::Success;
     auto& service = result.windowsUpdate.services.entries[0];
     Check(Rule(ComputeScore(result), "wu.service.wuauserv").awardedPoints == 5, "idle manual update service is available on demand");
@@ -260,7 +260,14 @@ static void TestWindowsUpdate() {
     WindowsUpdateItem item;
     item.title = L"Pending \"Windows\" update"; item.id = L"update-id"; item.kbArticles = {L"1234567"};
     item.optional = Tri::No; item.downloaded = Tri::Yes;
+    item.updateType = L"Software"; item.classifications = {L"Security Updates"};
+    item.products = {L"Microsoft .NET Framework"}; item.severity = L"Critical";
     result.windowsUpdate.updates.push_back(item);
+    WindowsUpdateItem optional = item;
+    optional.id = L"optional-id"; optional.title = L"Optional driver"; optional.optional = Tri::Yes;
+    optional.updateType = L"Driver"; optional.classifications.clear(); optional.products.clear(); optional.severity.clear();
+    result.windowsUpdate.updates.push_back(optional); result.windowsUpdate.optionalCount = 1;
+    result.windowsUpdate.services.entries[0].displayName = L"Windows Update";
     result.score = ComputeScore(result);
     std::ofstream("windows-update-output.json", std::ios::binary) << RenderJson(result);
     std::wostringstream captured;
@@ -269,14 +276,33 @@ static void TestWindowsUpdate() {
     std::wcout.rdbuf(old);
     Check(captured.str().find(item.title) != std::wstring::npos && captured.str().find(L"KB1234567") != std::wstring::npos,
           "pending update title and KB are shown in console output");
+    Check(captured.str().find(L"|- Pending \"Windows\" update  [Security Updates; Severity: Critical]") != std::wstring::npos &&
+          captured.str().find(L"Products: Microsoft .NET Framework") != std::wstring::npos &&
+          captured.str().find(L"`- Optional driver  [Optional; Driver]") != std::wstring::npos,
+          "pending update tree includes API classifications, products, severity, and optional driver types");
+    Check(captured.str().find(L"|- wuauserv - Windows Update") != std::wstring::npos &&
+          captured.str().find(L"`- UsoSvc") != std::wstring::npos, "update services form a tree with service key names first");
     const size_t scoreStart = captured.str().find(L"Rule breakdown");
     const size_t updateGroup = captured.str().find(L"Windows Update", scoreStart);
     const size_t metadata = captured.str().find(L"Windows update details available", scoreStart);
     Check(scoreStart != std::wstring::npos && updateGroup != std::wstring::npos && metadata > updateGroup,
           "update details appear under Windows Update despite retaining the os.patch ID");
+    result.windowsUpdate.updates.clear(); result.windowsUpdate.pendingCount = result.windowsUpdate.optionalCount = 0;
+    captured.str(L""); captured.clear(); old = std::wcout.rdbuf(captured.rdbuf());
+    try { RenderConsole(result); } catch (...) { std::wcout.rdbuf(old); throw; }
+    std::wcout.rdbuf(old);
+    const size_t pendingStart = captured.str().find(L"Pending Updates  (None)");
+    const size_t pendingEnd = captured.str().find(L"Latest installation", pendingStart);
+    Check(pendingStart != std::wstring::npos && pendingEnd != std::wstring::npos &&
+          captured.str().substr(pendingStart, pendingEnd - pendingStart).find(L"|-") == std::wstring::npos &&
+          captured.str().substr(pendingStart, pendingEnd - pendingStart).find(L"`-") == std::wstring::npos,
+          "no pending updates prints None without an empty tree");
     result.windowsUpdate.pendingStatus = Status::Unavailable;
     result.score = ComputeScore(result);
     std::ofstream("windows-update-unknown.json", std::ios::binary) << RenderJson(result);
+    const auto apiServices = CollectServices({L"WuAuSeRv"});
+    Check(apiServices.entries.size() == 1 && apiServices.entries[0].status == Status::Success &&
+          apiServices.entries[0].name == L"wuauserv", "SCM supplies the canonical service key name instead of echoing the requested casing");
 }
 
 static void TestComAndWmi() {
@@ -447,6 +473,7 @@ static void TestRegisteredAntivirus() {
 
 int main() {
     try {
+        Check(::SetEnvironmentVariableW(L"NO_COLOR", L"1") != FALSE, "use deterministic ASCII tree rendering in regressions");
         Fixture fixture;
         TestRegistry(fixture);
         TestFiles(fixture);

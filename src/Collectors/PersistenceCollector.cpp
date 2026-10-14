@@ -231,6 +231,18 @@ ServiceReport CollectServices(const std::vector<std::wstring>& names) {
                 e.displayName = cfg->lpDisplayName ? cfg->lpDisplayName : L"";
                 e.startType = StartName(cfg->dwStartType);
                 e.exePath = cfg->lpBinaryPathName ? cfg->lpBinaryPathName : L"";
+                // Resolve the canonical service key name from the SCM's display name.
+                // Keep the requested name as a fallback when the mapping is unavailable.
+                if (!e.displayName.empty()) {
+                    DWORD nameLength = 0;
+                    const BOOL nameProbe = ::GetServiceKeyNameW(scm.get(), e.displayName.c_str(), nullptr, &nameLength);
+                    if (!nameProbe && ::GetLastError() == ERROR_INSUFFICIENT_BUFFER && nameLength) {
+                        std::vector<wchar_t> keyName(static_cast<size_t>(nameLength) + 1);
+                        nameLength = static_cast<DWORD>(keyName.size());
+                        if (::GetServiceKeyNameW(scm.get(), e.displayName.c_str(), keyName.data(), &nameLength))
+                            e.name.assign(keyName.data(), nameLength);
+                    }
+                }
             }
             else e.status = StatusFromWin32(::GetLastError());
         }

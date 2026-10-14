@@ -92,21 +92,23 @@ Defender JSON fields have individual status companions (for example, `cloudProte
 
 ## Scoring
 
-Smart App Control earns 25/50 points in evaluation mode and 50/50 when enabled. Disabled or unavailable states earn zero. Defender's no-active-threats check contributes 20 points. The OS category totals 145 points and malware protection totals 195. Windows Update has its own 100-point category, keeping the overall maximum at 1000. Score states describe each result, such as Supported, Available, Clear, Running, or Complete.
+Smart App Control earns 25/50 points in evaluation mode and 50/50 when enabled. Disabled or unavailable states earn zero. Defender's no-active-threats check contributes 20 points. The OS category totals 145 points and malware protection totals 195. Windows Update has its own 60-point category, keeping the overall maximum at 1000. Score states describe each result, such as Supported, Available, Clear, Running, or Complete.
 
 ### Windows Update
 
-The report uses the native Windows Update Agent COM API to read locally cached pending updates, titles, KB references, download state, restart requirements, the last successful search time, and the latest installation result. It reads seven related services through the Service Control Manager. The update search stays offline and has a 45-second completion timeout; no updates are downloaded or installed. Cached results reflect Windows' last scan, so they can differ from a fresh online check. Optional updates are listed separately and do not reduce the score. Unreadable counts display Unknown (JSON `null`).
+The report uses the native Windows Update Agent COM API to read locally cached pending updates, titles, KB references, download state, restart requirements, the last successful search time, and the latest installation result. Pending updates appear in a tree under `Pending Updates`, with API-reported classifications (such as Security Updates or Critical Updates), product names (including .NET products when reported), optional status, and security severity. Empty results show `Pending Updates (None)` without a tree. Pending and optional updates are informational and never affect the score. Unreadable counts display Unknown (JSON `null`).
+
+Seven related services appear in an `Update Services` tree, each prefixed with its canonical service key name resolved through the Service Control Manager, followed by its display name and state. If the name mapping cannot be read, the requested service name is retained as a fallback. The update search stays offline and has a 45-second completion timeout; no updates are downloaded or installed. Cached results reflect Windows' last scan, so they can differ from a fresh online check.
 
 | Check | Maximum | Scoring |
 | --- | ---: | --- |
 | Windows update details available | 30 | Installed update revision can be read; this does not prove Windows is up to date. |
-| Pending Windows updates | 40 | 40 with none cached, 35 with one, 30 with two; subtract 5 per pending update, reaching zero at eight. |
+| Pending Windows updates | 0 | Informational only; counts and types never change the score. |
 | Update service readiness | 15 | 5 each for Windows Update, BITS, and Update Orchestrator when enabled and available; idle services that start on demand qualify. |
 | Update restart completed | 10 | No update restart is required. |
 | Latest update installation | 5 | The latest recorded installation succeeded. |
 
-The existing update-details rule retains its `os.patch` ID and moves into Windows Update. To fund the new 70 points, TPM key-protection availability changes from 75 to 25 points and assessment administrator access from 25 to 5 points. JSON adds a `windowsUpdate` section. Failed or incomplete reads do not earn credit for the affected check.
+The existing update-details rule retains its `os.patch` ID in Windows Update. Service, restart, and history weights remain unchanged. The removed pending-update budget returns 40 points to TPM key-protection availability (25 to 65), preserving the overall 1000-point maximum; assessment administrator access remains 5 points. JSON includes classification, product, type, and severity fields for each update. Failed or incomplete reads do not earn credit for scored checks.
 
 ## Registered antivirus fallback
 

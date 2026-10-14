@@ -60,6 +60,32 @@ const wchar_t* OperationName(OperationResultCode result) {
     }
 }
 
+void ReadUpdateTypes(IUpdate* update, WindowsUpdateItem& item) {
+    UpdateType type{};
+    if (SUCCEEDED(update->get_Type(&type))) {
+        if (type == utSoftware) item.updateType = L"Software";
+        else if (type == utDriver) item.updateType = L"Driver";
+    }
+    Bstr severity;
+    if (SUCCEEDED(update->get_MsrcSeverity(&severity.value))) item.severity = severity.str();
+    ComPtr<ICategoryCollection> categories;
+    if (FAILED(update->get_Categories(categories.GetAddressOf())) || !categories) return;
+    LONG count = 0;
+    if (FAILED(categories->get_Count(&count)) || count < 0) return;
+    for (LONG i = 0; i < count; ++i) {
+        ComPtr<ICategory> category;
+        if (FAILED(categories->get_Item(i, category.GetAddressOf())) || !category) continue;
+        Bstr name, categoryType;
+        if (FAILED(category->get_Name(&name.value)) || FAILED(category->get_Type(&categoryType.value))) continue;
+        const auto label = name.str();
+        if (label.empty()) continue;
+        auto* labels = IEquals(categoryType.str(), L"UpdateClassification") ? &item.classifications
+            : IEquals(categoryType.str(), L"Product") ? &item.products : nullptr;
+        if (labels && std::none_of(labels->begin(), labels->end(), [&](const auto& existing) { return IEquals(existing, label); }))
+            labels->push_back(label);
+    }
+}
+
 class SearchCompleted final : public Microsoft::WRL::RuntimeClass<
     Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>, ISearchCompletedCallback,
     Microsoft::WRL::FtmBase> {
@@ -180,6 +206,7 @@ void ReadPending(IUpdateSearcher* searcher, WindowsUpdateInfo& info) {
         if (SUCCEEDED(update->get_Identity(identity.GetAddressOf())) && identity &&
             SUCCEEDED(identity->get_UpdateID(&id.value))) item.id = id.str();
         if (!item.id.empty() && !seen.insert(ToLower(item.id)).second) continue;
+        ReadUpdateTypes(update.Get(), item);
         ComPtr<IUpdate3> modern;
         VARIANT_BOOL value = VARIANT_FALSE;
         if (SUCCEEDED(update.As(&modern)) && SUCCEEDED(modern->get_BrowseOnly(&value)))

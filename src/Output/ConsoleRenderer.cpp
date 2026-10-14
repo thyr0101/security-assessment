@@ -44,6 +44,7 @@ const wchar_t* GFull()   { return g_color ? L"\u2588" : L"#"; }
 const wchar_t* GEmpty()  { return g_color ? L"\u2591" : L"."; }
 const wchar_t* GTee()    { return g_color ? L"\u251C\u2500" : L"|-"; }
 const wchar_t* GCorner() { return g_color ? L"\u2514\u2500" : L"`-"; }
+const wchar_t* GBranch() { return g_color ? L"\u2502  " : L"|  "; }
 
 std::wostream& out() { return std::wcout; }
 
@@ -122,6 +123,21 @@ void Flag(const wchar_t* label, bool on) {
 void Flag(const wchar_t* label, bool on, Status status) {
     if (status == Status::Success) Flag(label, on);
     else KV(label, L"Unknown (" + std::wstring(ToW(status)) + L")", Yel());
+}
+
+std::wstring UpdateTypes(const WindowsUpdateItem& item) {
+    std::vector<std::wstring> labels;
+    auto add = [&](const std::wstring& label) {
+        if (!label.empty() && std::none_of(labels.begin(), labels.end(), [&](const auto& existing) { return IEquals(existing, label); }))
+            labels.push_back(label);
+    };
+    if (item.optional == Tri::Yes) add(L"Optional");
+    for (const auto& classification : item.classifications) add(classification);
+    if (item.classifications.empty()) add(item.updateType.empty() ? L"Type unknown" : item.updateType);
+    if (!item.severity.empty()) add(L"Severity: " + item.severity);
+    std::wstring text;
+    for (const auto& label : labels) { if (!text.empty()) text += L"; "; text += label; }
+    return text;
 }
 
 // ---- ANSI mode RAII ----
@@ -275,22 +291,38 @@ void RenderConsole(const AssessmentResult& r) {
     Section(L"Windows Update");
     const auto& update = r.windowsUpdate;
     const bool pendingKnown = update.pendingStatus == Status::Success;
-    KV(L"Pending updates", pendingKnown ? Num(update.pendingCount) : L"Unknown", pendingKnown ? Wht() : Yel());
-    KV(L"Optional updates", pendingKnown ? Num(update.optionalCount) : L"Unknown");
     KV(L"Update source", L"Windows' local update cache", Dim());
     KV(L"Last search (UTC)", update.lastSearchUtc.empty() ? L"Unknown" : update.lastSearchUtc);
     KV(L"Restart required", ToW(update.rebootRequired), update.rebootRequired == Tri::Yes ? Yel() : Wht());
-    for (const auto& item : update.updates) {
-        SubHeader(item.title, item.optional == Tri::Yes ? L"Optional" : item.optional == Tri::No ? L"Pending" : L"Type unknown", Yel());
+    SubHeader(L"Pending Updates", update.updates.empty() ? (pendingKnown ? L"(None)" : L"(Unknown)")
+        : L"(" + Num(update.updates.size()) + (pendingKnown ? L")" : L" listed; incomplete)"),
+        pendingKnown ? Dim() : Yel());
+    for (size_t i = 0; i < update.updates.size(); ++i) {
+        const auto& item = update.updates[i];
+        const bool last = i + 1 == update.updates.size();
+        out() << L"    " << Dim() << (last ? GCorner() : GTee()) << Rst() << L" "
+              << Wht() << item.title << Rst() << L"  " << Cyn() << L"[" << UpdateTypes(item) << L"]" << Rst() << L"\n";
+        const std::wstring branch = last ? L"   " : GBranch();
+        if (!item.products.empty()) {
+            std::wstring products;
+            for (const auto& product : item.products) {
+                if (!products.empty()) products += L", ";
+                products += product;
+            }
+            out() << L"    " << Dim() << branch << GTee() << Rst() << L" "
+                  << Lbl() << L"Products: " << Rst() << products << L"\n";
+        }
         if (!item.kbArticles.empty()) {
             std::wstring articles;
             for (const auto& kb : item.kbArticles) {
                 if (!articles.empty()) articles += L", ";
                 articles += L"KB" + kb;
             }
-            KV(L"Update reference", articles);
+            out() << L"    " << Dim() << branch << GTee() << Rst() << L" "
+                  << Lbl() << L"Update reference: " << Rst() << articles << L"\n";
         }
-        KV(L"Downloaded", ToW(item.downloaded));
+        out() << L"    " << Dim() << branch << GCorner() << Rst() << L" "
+              << Lbl() << L"Downloaded: " << Rst() << ToW(item.downloaded) << L"\n";
     }
     if (!update.pendingReason.empty()) KV(L"Update query", update.pendingReason, Yel());
     KV(L"Latest installation", update.lastInstallationResult.empty() ? L"Unknown" : update.lastInstallationResult,
@@ -298,13 +330,16 @@ void RenderConsole(const AssessmentResult& r) {
     if (!update.lastInstallationTitle.empty()) KV(L"Update name", update.lastInstallationTitle);
     if (!update.lastInstallationUtc.empty()) KV(L"Installation (UTC)", update.lastInstallationUtc);
     if (!update.lastInstallationError.empty()) KV(L"Installation error", update.lastInstallationError, Yel());
-    SubHeader(L"Update services", L"", Dim());
-    for (const auto& service : update.services.entries) {
-        const std::wstring label = service.displayName.empty() ? service.name : service.displayName;
-        KV(label.c_str(), service.status == Status::Success
-            ? service.state + L" (" + service.startType + L")"
-            : L"Unknown (" + std::wstring(ToW(service.status)) + L")",
-            service.status != Status::Success ? Yel() : service.startType == L"Disabled" ? Red() : Wht());
+    SubHeader(L"Update Services", update.services.entries.empty() ? L"(Unavailable)" : L"", Dim());
+    for (size_t i = 0; i < update.services.entries.size(); ++i) {
+        const auto& service = update.services.entries[i];
+        const std::wstring label = service.displayName.empty() || IEquals(service.name, service.displayName)
+            ? service.name : service.name + L" - " + service.displayName;
+        const std::wstring state = service.status == Status::Success ? service.state + L" (" + service.startType + L")"
+            : L"Unknown (" + std::wstring(ToW(service.status)) + L")";
+        const wchar_t* color = service.status != Status::Success ? Yel() : service.startType == L"Disabled" ? Red() : Wht();
+        out() << L"    " << Dim() << (i + 1 == update.services.entries.size() ? GCorner() : GTee()) << Rst()
+              << L" " << Wht() << label << Rst() << L"  " << color << L"[" << state << L"]" << Rst() << L"\n";
     }
 
     // ------------------------------------------------------------ Storage

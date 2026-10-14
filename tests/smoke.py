@@ -39,7 +39,7 @@ def main():
         assert evaluation_rules['os.patch']['description'] == 'Windows update details available'
         assert evaluation_rules['os.patch']['state'] == 'Available'
         assert sum(rule['maxPoints'] for rule in evaluation_rules.values() if rule['category'] == 'OS Security') == 145
-        assert sum(rule['maxPoints'] for rule in evaluation_rules.values() if rule['category'] == 'Windows Update') == 100
+        assert sum(rule['maxPoints'] for rule in evaluation_rules.values() if rule['category'] == 'Windows Update') == 60
         assert sum(rule['maxPoints'] for rule in evaluation_rules.values() if rule['id'].startswith('mp.')) == 195
         antivirus = json.loads((Path(scratch) / 'antivirus-output.json').read_text(encoding='utf-8'))
         assert antivirus['antivirus']['hasThirdParty'] is True
@@ -56,7 +56,11 @@ def main():
         assert updates['windowsUpdate']['updates'][0]['title'] == 'Pending "Windows" update'
         assert updates['windowsUpdate']['updates'][0]['kbArticles'] == ['1234567']
         update_rules = {rule['id']: rule for rule in updates['score']['rules']}
-        assert update_rules['wu.pending']['awardedPoints'] == 35
+        assert update_rules['wu.pending']['awardedPoints'] == 0 and update_rules['wu.pending']['maxPoints'] == 0
+        assert updates['windowsUpdate']['updates'][0]['classifications'] == ['Security Updates']
+        assert updates['windowsUpdate']['updates'][0]['products'] == ['Microsoft .NET Framework']
+        assert updates['windowsUpdate']['updates'][0]['severity'] == 'Critical'
+        assert updates['windowsUpdate']['updates'][1]['updateType'] == 'Driver'
         assert update_rules['os.patch']['category'] == 'Windows Update'
         unknown_updates = json.loads((Path(scratch) / 'windows-update-unknown.json').read_text(encoding='utf-8'))
         assert unknown_updates['windowsUpdate']['pendingCount'] is None
@@ -82,13 +86,14 @@ def main():
         assert score['awardedPoints'] == (195 if product['status'] == 'Success' and product['state'] == 'Enabled' else 0)
     rules = {rule['id']: rule for rule in report['score']['rules']}
     assert rules['os.patch']['category'] == 'Windows Update'
-    assert sum(rule['maxPoints'] for rule in rules.values() if rule['category'] == 'Windows Update') == 100
+    assert sum(rule['maxPoints'] for rule in rules.values() if rule['category'] == 'Windows Update') == 60
+    assert rules['wu.pending']['maxPoints'] == 0 and rules['wu.pending']['awardedPoints'] == 0
     updates = report['windowsUpdate']
     assert updates['cachedOnly'] is True
     if updates['pendingStatus'] == 'Success':
         assert updates['pendingCount'] == sum(item['optional'] == 'No' for item in updates['updates'])
         assert updates['optionalCount'] == sum(item['optional'] == 'Yes' for item in updates['updates'])
-        assert rules['wu.pending']['awardedPoints'] == max(0, 40 - 5 * updates['pendingCount'])
+        assert rules['wu.pending']['awardedPoints'] == 0
     else:
         assert updates['pendingCount'] is None and rules['wu.pending']['state'] == 'Unknown'
     assert rules['os.sac']['maxPoints'] == 50
@@ -118,7 +123,7 @@ def main():
     console, _ = run(app, '--no-hash')
     assert 'SECURITY SCORE' in console and '\x1b[' not in console
     assert 'Windows update details available' in console
-    assert 'Update services' in console and 'Pending updates' in console
+    assert 'Update Services' in console and 'Pending Updates' in console
     print(f"Smoke checks passed: JSON, hashes, help, redirected console; elevated={report['security']['elevated']}.")
     print(f"Elapsed: --no-hash {no_hash_time:.3f}s; hashing {hash_time:.3f}s (single runs, not a benchmark).")
     if args.baseline:

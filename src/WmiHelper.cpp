@@ -89,12 +89,12 @@ namespace sa {
             Microsoft::WRL::ComPtr<IWbemClassObject> owned[8];
             for (ULONG i = 0; i < ret; ++i) owned[i].Attach(objs[i]);
             for (ULONG i = 0; i < ret; ++i) pending.push_back(std::move(owned[i]));
-            if (hr == WBEM_S_TIMEDOUT) {
+            if (hr == static_cast<HRESULT>(WBEM_S_TIMEDOUT)) {
                 if (++timeouts >= 10) { lastFail = HRESULT_FROM_WIN32(ERROR_TIMEOUT); break; }
                 continue;
             }
             if (FAILED(hr)) { lastFail = hr; break; }
-            if (hr == WBEM_S_FALSE || ret == 0) break;
+            if (hr == static_cast<HRESULT>(WBEM_S_FALSE) || ret == 0) break;
         }
         if (FAILED(lastFail)) {
             if (reason) *reason = L"query failed " + HrText(lastFail);

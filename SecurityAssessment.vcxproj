@@ -58,6 +58,7 @@
     <ClCompile Include="src\Collectors\HardwareCollector.cpp" />
     <ClCompile Include="src\Collectors\SecurityCollector.cpp" />
     <ClCompile Include="src\Collectors\DefenderCollector.cpp" />
+    <ClCompile Include="src\Collectors\AntivirusCollector.cpp" />
     <ClCompile Include="src\Collectors\FirewallCollector.cpp" />
     <ClCompile Include="src\Collectors\NetworkCollector.cpp" />
     <ClCompile Include="src\Collectors\StorageCollector.cpp" />
@@ -78,6 +79,7 @@
     <ClInclude Include="src\Collectors\HardwareCollector.h" />
     <ClInclude Include="src\Collectors\SecurityCollector.h" />
     <ClInclude Include="src\Collectors\DefenderCollector.h" />
+    <ClInclude Include="src\Collectors\AntivirusCollector.h" />
     <ClInclude Include="src\Collectors\FirewallCollector.h" />
     <ClInclude Include="src\Collectors\NetworkCollector.h" />
     <ClInclude Include="src\Collectors\StorageCollector.h" />

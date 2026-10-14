@@ -110,7 +110,7 @@ The console uses blue for service identifiers, white for display names, and cyan
 | Update restart completed | 10 | No update restart is required. |
 | Latest update installation | 5 | The latest recorded installation succeeded. |
 
-The existing update-details rule retains its `os.patch` ID in Windows Update. Service, restart, and history weights remain unchanged. The removed pending-update budget returns 40 points to TPM key-protection availability (25 to 65), preserving the overall 1000-point maximum; assessment administrator access remains 5 points. JSON includes classification, product, type, and severity fields for each update. Failed or incomplete reads do not earn credit for scored checks.
+The existing update-details rule retains its `os.patch` ID in Windows Update. Service, restart, and history weights remain unchanged. Pending updates remain informational. Following the network-hardening expansion, TPM key-protection availability is worth 60 points; assessment administrator access remains 5 points. The overall maximum remains 1000. JSON includes classification, product, type, and severity fields for each update. Failed or incomplete reads do not earn credit for scored checks.
 
 ## Registered antivirus fallback
 
@@ -146,3 +146,36 @@ Privacy collection uses native registry reads; replacing these with undocumented
 Every entry identifies its scope. App permissions describe defaults, not active access: individual app overrides, desktop-app exceptions, Windows edition/version support, and other restrictions can affect actual behavior. Clipboard policy permission does not prove that sync is active, and stored speech consent does not override device restrictions. Expanded JSON privacy entries include status, scope, and group alongside their existing fields. Privacy remains informational and does not change the 1000-point score.
 
 Policy mappings follow Microsoft's [Privacy policy reference](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-privacy) and [System policy reference](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-system), together with Windows' installed ADMX definitions.
+
+## Network Security
+
+The network section was expanded after reviewing [Apotrope's network, SMB, and Remote Desktop checks](https://github.com/hexorcist404/apotrope). Only relevant checks were selected, with independent native implementations: the app does not run Apotrope, PowerShell, external tools, or network probes.
+
+- Firewall service, Domain/Private/Public enablement, active profile markers, and default inbound/outbound actions.
+- SMB1 server configuration and legacy client-driver availability, incoming/outgoing signing requirements, insecure guest logons, global server encryption, and rejection of unencrypted access. SMB settings come from the Windows SMB provider's read-only `GetConfiguration` methods through COM/WMI, rather than guesses based on registry defaults. An absent SMB1 redirector service is treated as unavailable for use; an unreadable driver setting is unknown.
+- LLMNR policy and NetBIOS configuration on active, non-loopback IPv4 adapters. Missing LLMNR policy is **Not configured**, not proof that multicast resolution is disabled. DHCP-controlled NetBIOS configuration does not prove the effective state is disabled.
+- Remote Desktop enablement, Network Level Authentication requirement, and configured RDP port. Registry policy takes precedence over local configuration. The score accepts disabled RDP or enabled RDP with verified NLA; configuration is not proof of reachability.
+- Active adapter addresses, gateways, DNS servers, MAC addresses, DHCP information, and NetBIOS settings. Disconnected adapter names remain visible, with their full inventory available in JSON. IPv6 presence, DNS provider, and VPN-name heuristics do not affect scoring.
+- All local TCP listeners across IPv4 and IPv6, grouped by port and owning process with binding addresses and loopback/all-interface labels. UDP enumeration is restricted in the report to port 69 for TFTP review. FTP/Telnet/TFTP ports bound beyond loopback receive review notes; the port alone does not identify the protocol. Process lookup is cached by PID, requires only limited query access, and retains unknown names when access is denied or a process exits.
+
+Listeners and SMB encryption settings are informational. The app does not probe connectivity or claim that a listener is internet-accessible. Individual shares can require encryption independently of global settings. Failed endpoint reads are marked incomplete instead of reported as no listeners. JSON adds network security configuration, per-setting status/source/reason, adapter NetBIOS status, endpoint owner/binding information, and separate IPv4/IPv6 query statuses; existing fields remain available.
+
+### Revised score allocation
+
+| Category | Maximum |
+| --- | ---: |
+| Hardware Security | 180 |
+| Operating System | 145 |
+| Windows Update | 60 |
+| Malware Protection | 195 |
+| Network Security | 180 |
+| Encryption | 160 |
+| Account Security | 80 |
+| Software inventory and privacy | 0 (informational) |
+| **Total** | **1000** |
+
+Network retains 60 points for firewall profile coverage, 20 for default inbound blocking, and 20 for the firewall service. Eight additional checks are worth 10 each: SMB1 server disabled, SMB1 client disabled/absent, incoming SMB signing required, outgoing SMB signing required, insecure SMB guests blocked, LLMNR explicitly disabled, NetBIOS disabled on all active IPv4 adapters, and RDP disabled or NLA required. NetBIOS is satisfied as not applicable when adapter enumeration succeeds and no active non-loopback IPv4 adapter exists. Unknown readings earn no credit.
+
+The 80 new points replace 40 inventory-completion points, 35 CPU-capability points (virtualization, AES acceleration, NX), and 5 TPM-availability points. These capabilities and inventory results remain visible as information; they do not by themselves establish an enforced security configuration. Stable rule IDs remain in JSON with zero maximum for informational checks. Scores from earlier versions are therefore not directly comparable without considering the changed weights.
+
+Native sources: Microsoft's [SMB configuration provider](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/smb/getconfiguration-msft-smbserverconfiguration), [IP Helper TCP table API](https://learn.microsoft.com/en-us/windows/win32/api/iphlpapi/nf-iphlpapi-getextendedtcptable), [network adapter configuration](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-networkadapterconfiguration), [DNS Client policies](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-admx-dnsclient), and [Remote Desktop policies](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-remotedesktopservices).

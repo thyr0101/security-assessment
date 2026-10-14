@@ -217,6 +217,8 @@ struct FirewallInfo {
     bool serviceRunning = false;
     Status serviceStatus = Status::Error;
     Status status = Status::Error;
+    DWORD activeProfiles = 0;
+    Status activeProfilesStatus = Status::Unavailable;
 };
 
 struct StorageVolume {
@@ -271,11 +273,41 @@ struct NetworkAdapterInfo {
     bool isLoopback = false;
     bool isVirtual = false;
     bool isVpn = false;
+    DWORD netbiosOptions = 3; // 0=DHCP controlled, 1=enabled, 2=disabled, 3=unknown.
+    Status netbiosStatus = Status::Unavailable;
+};
+
+struct NetworkSetting {
+    Tri enabled = Tri::Unknown;
+    Status status = Status::Unavailable;
+    std::wstring source;
+    std::wstring reason;
+};
+
+struct NetworkEndpoint {
+    std::wstring protocol; // TCP or UDP
+    std::wstring family;   // IPv4 or IPv6
+    std::wstring address;
+    unsigned port = 0;
+    DWORD processId = 0;
+    std::wstring processName;
+    Status processStatus = Status::Unavailable;
+    std::wstring binding;  // Loopback / All interfaces / Interface
+    std::wstring reviewNote;
 };
 
 struct NetworkInfo {
     std::vector<NetworkAdapterInfo> adapters;
     Status status = Status::Error;
+    NetworkSetting smb1Server, smb1Client;
+    NetworkSetting smbServerSigning, smbClientSigning, smbGuestLogons;
+    NetworkSetting smbEncryption, smbRejectUnencrypted;
+    NetworkSetting llmnr, rdp, rdpNla;
+    unsigned rdpPort = 0;
+    Status rdpPortStatus = Status::Unavailable;
+    std::vector<NetworkEndpoint> endpoints; // All TCP listeners, plus UDP port 69.
+    Status tcp4Status = Status::Unavailable, tcp6Status = Status::Unavailable;
+    Status udp4Status = Status::Unavailable, udp6Status = Status::Unavailable;
 };
 
 struct ServiceEntry {

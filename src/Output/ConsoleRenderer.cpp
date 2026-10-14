@@ -245,6 +245,8 @@ void RenderConsole(const AssessmentResult& r) {
     FlagPair(L"VBS", r.security.virt.vbsEnabled, r.security.virt.status,
              L"HVCI", r.security.virt.hvciEnabled, runningStatus);
     Flag(L"Credential Guard", r.security.virt.credentialGuardRunning, runningStatus);
+    Pair(L"AES acceleration", r.cpu.status != Status::Success ? L"Unknown" : r.cpu.aesni ? L"Supported" : L"Unsupported",
+         L"CPU memory protection", r.cpu.status != Status::Success ? L"Unknown" : r.cpu.nx ? L"Supported" : L"Unsupported", Cyn());
     if (r.security.virt.hvciConfigured != Tri::Unknown)
         KV(L"HVCI configured", ToW(r.security.virt.hvciConfigured), Yel());
 
@@ -296,9 +298,110 @@ void RenderConsole(const AssessmentResult& r) {
     if (r.antivirus.status != Status::Success && !r.antivirus.reason.empty())
         KV(L"Antivirus query", r.antivirus.reason, Yel());
 
+    // ------------------------------------------------------------ Network security
+    Section(L"Network Security");
+    const auto& network = r.network;
+    auto setting = [&](const wchar_t* label, const NetworkSetting& value,
+                       const wchar_t* yes = L"Enabled", const wchar_t* no = L"Disabled",
+                       bool favorable = true, bool informational = false) {
+        const bool known = value.status == Status::Success && (value.enabled == Tri::Yes || value.enabled == Tri::No);
+        const auto text = known ? std::wstring(value.enabled == Tri::Yes ? yes : no)
+            : value.status == Status::NotFound ? std::wstring(L"Not configured")
+            : L"Unknown (" + std::wstring(ToW(value.status)) + L")";
+        KV(label, text, !known ? Yel() : informational ? Cyn()
+            : ((value.enabled == Tri::Yes) == favorable) ? Grn() : Yel());
+    };
+    auto join = [](const std::vector<std::wstring>& values) {
+        std::wstring text;
+        for (const auto& value : values) { if (!text.empty()) text += L", "; text += value; }
+        return text.empty() ? std::wstring(L"None") : text;
+    };
     SubHeader(L"Windows Firewall", L"", Dim());
-    for (auto& p : r.firewall.profiles)
-        Flag((p.name).c_str(), p.enabled, p.status);
+    Flag(L"Firewall service", r.firewall.serviceRunning, r.firewall.serviceStatus);
+    for (size_t i = 0; i < r.firewall.profiles.size(); ++i) {
+        const auto& profile = r.firewall.profiles[i];
+        const DWORD mask = profile.name == L"Domain" ? 1 : profile.name == L"Private" ? 2 : profile.name == L"Public" ? 4 : 0;
+        out() << L"    " << Dim() << (i + 1 == r.firewall.profiles.size() ? GCorner() : GTee()) << L" "
+              << Wht() << profile.name << Rst();
+        if (r.firewall.activeProfilesStatus == Status::Success && (r.firewall.activeProfiles & mask))
+            out() << Cyn() << L" (active)" << Rst();
+        out() << L"  " << (profile.status != Status::Success ? Yel() : profile.enabled ? Grn() : Red())
+              << (profile.status != Status::Success ? L"Unknown" : profile.enabled ? L"ENABLED" : L"DISABLED")
+              << Dim() << L"  |  Inbound " << Cyn()
+              << (profile.status != Status::Success || profile.defaultInbound > 1 ? L"Unknown" : profile.defaultInbound == 0 ? L"Block" : L"Allow")
+              << Dim() << L"  |  Outbound " << Cyn()
+              << (profile.status != Status::Success || profile.defaultOutbound > 1 ? L"Unknown" : profile.defaultOutbound == 0 ? L"Block" : L"Allow")
+              << Rst() << L"\n";
+    }
+    if (r.firewall.profiles.empty()) KV(L"Firewall profiles", L"Unknown", Yel());
+    if (r.firewall.activeProfilesStatus != Status::Success) KV(L"Active profiles", L"Unknown", Yel());
+
+    SubHeader(L"File Sharing (SMB)", L"", Dim());
+    setting(L"Legacy SMB1 server", network.smb1Server, L"Enabled", L"Disabled", false);
+    setting(L"Legacy SMB1 client", network.smb1Client, L"Available", L"Disabled / absent", false);
+    setting(L"Incoming SMB signing", network.smbServerSigning, L"Required", L"Not required");
+    setting(L"Outgoing SMB signing", network.smbClientSigning, L"Required", L"Not required");
+    setting(L"SMB guest logons", network.smbGuestLogons, L"Allowed", L"Blocked", false);
+    setting(L"Global SMB encryption", network.smbEncryption, L"Enabled", L"Disabled", true, true);
+    setting(L"Reject unencrypted SMB", network.smbRejectUnencrypted, L"Yes", L"No", true, true);
+    KV(L"Encryption scope", L"Informational server settings; individual shares may also require encryption.", Dim());
+
+    SubHeader(L"Name Resolution & Remote Desktop", L"", Dim());
+    setting(L"LLMNR policy", network.llmnr, L"Allowed", L"Disabled", false);
+    setting(L"Remote Desktop", network.rdp, L"Enabled", L"Disabled", false, true);
+    setting(L"RDP authentication", network.rdpNla, L"NLA required", L"NLA not required");
+    KV(L"Configured RDP port", network.rdpPortStatus == Status::Success ? Num(network.rdpPort) : L"Unknown", Cyn());
+    KV(L"RDP scope", L"Configuration only; listeners and firewall rules determine actual access.", Dim());
+
+    SubHeader(L"Network Adapters", Num(network.adapters.size()) + L" found", Dim());
+    for (const auto& adapter : network.adapters) {
+        SubHeader(adapter.name, adapter.ifType + (adapter.up ? L" / Up" : L" / Down"), adapter.up ? Cyn() : Dim());
+        // Disconnected adapter names stay visible; their full inventory remains in JSON.
+        if (!adapter.up) continue;
+        KV(L"Description", adapter.description, Dim());
+        Pair(L"IPv4", join(adapter.ipv4), L"IPv6", join(adapter.ipv6), Cyn());
+        Pair(L"Gateway", join(adapter.gateways), L"DNS", join(adapter.dns), Cyn());
+        Pair(L"MAC", adapter.macAddress.empty() ? L"None" : adapter.macAddress,
+             L"DHCP", adapter.dhcp ? L"Enabled" : L"Disabled", Cyn());
+        if (!adapter.dhcpServer.empty()) KV(L"DHCP server", adapter.dhcpServer, Cyn());
+        if (!adapter.isLoopback && !adapter.ipv4.empty()) {
+            const auto netbios = adapter.netbiosStatus != Status::Success ? std::wstring(L"Unknown (") + ToW(adapter.netbiosStatus) + L")"
+                : adapter.netbiosOptions == 2 ? std::wstring(L"Disabled") : adapter.netbiosOptions == 1 ? std::wstring(L"Enabled")
+                : std::wstring(L"DHCP controlled (effective state unverified)");
+            KV(L"NetBIOS over TCP/IP", netbios, adapter.netbiosStatus == Status::Success && adapter.netbiosOptions == 2 ? Grn() : Yel());
+        }
+    }
+    if (network.status != Status::Success) KV(L"Adapter query", ToW(network.status), Yel());
+
+    auto endpoints = [&](const wchar_t* protocol, const wchar_t* title, Status ipv4, Status ipv6) {
+        size_t count = 0;
+        for (const auto& endpoint : network.endpoints) if (endpoint.protocol == protocol) ++count;
+        const bool complete = ipv4 == Status::Success && ipv6 == Status::Success;
+        SubHeader(title, Num(count) + (complete ? L" bindings" : L" bindings (incomplete)"), complete ? Dim() : Yel());
+        if (!complete) Pair(L"IPv4 query", ToW(ipv4), L"IPv6 query", ToW(ipv6), Yel());
+        if (!count && complete) out() << L"    " << Dim() << L"None" << Rst() << L"\n";
+        for (size_t i = 0; i < network.endpoints.size();) {
+            const auto& endpoint = network.endpoints[i];
+            if (endpoint.protocol != protocol) { ++i; continue; }
+            size_t end = i + 1;
+            while (end < network.endpoints.size() && network.endpoints[end].protocol == endpoint.protocol &&
+                   network.endpoints[end].port == endpoint.port && network.endpoints[end].processId == endpoint.processId) ++end;
+            out() << L"    " << Blu() << endpoint.protocol << L" " << endpoint.port << Rst()
+                  << L"  " << Wht() << endpoint.processName << Dim() << L" (PID " << endpoint.processId << L")" << Rst() << L"\n";
+            for (size_t j = i; j < end; ++j) {
+                const auto& binding = network.endpoints[j];
+                out() << L"      " << Dim() << (j + 1 == end ? GCorner() : GTee()) << L" " << Cyn()
+                      << (binding.family == L"IPv6" ? L"[" + binding.address + L"]" : binding.address)
+                      << Dim() << L"  [" << binding.binding << L"]" << Rst();
+                if (!binding.reviewNote.empty()) out() << L"  " << Yel() << binding.reviewNote << Rst();
+                out() << L"\n";
+            }
+            i = end;
+        }
+    };
+    endpoints(L"TCP", L"Local TCP Listeners (informational)", network.tcp4Status, network.tcp6Status);
+    endpoints(L"UDP", L"UDP Port 69 / TFTP Review (informational)", network.udp4Status, network.udp6Status);
+    KV(L"Listener scope", L"Local bindings do not prove remote reachability or identify the application protocol.", Dim());
 
     // ------------------------------------------------------------ Windows Update
     Section(L"Windows Update");
@@ -433,6 +536,11 @@ void RenderConsole(const AssessmentResult& r) {
             }
         }
     }
+
+    SubHeader(L"Inventory Coverage (informational)", L"", Dim());
+    for (const auto& rule : r.score.rules)
+        if (rule.id == "hyg.startup" || rule.id == "hyg.appinv")
+            KV(Utf8ToWide(rule.description).c_str(), Utf8ToWide(rule.state), rule.state == "Unknown" ? Yel() : Cyn());
 
     // ------------------------------------------------------------ Threshold findings
     Section(L"Threshold Findings");

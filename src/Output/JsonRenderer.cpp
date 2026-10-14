@@ -214,6 +214,8 @@ std::string RenderJson(const AssessmentResult& r) {
       << "\"status\":" << StatusS(r.firewall.status) << ","
       << "\"serviceRunning\":" << B(r.firewall.serviceRunning) << ","
       << "\"serviceStatus\":" << StatusS(r.firewall.serviceStatus) << ","
+      << "\"activeProfiles\":" << r.firewall.activeProfiles << ","
+      << "\"activeProfilesStatus\":" << StatusS(r.firewall.activeProfilesStatus) << ","
       << "\"profiles\":[";
     for (size_t i = 0; i < r.firewall.profiles.size(); ++i) {
         auto& p = r.firewall.profiles[i];
@@ -273,6 +275,10 @@ std::string RenderJson(const AssessmentResult& r) {
           << ",\"mac\":" << Q(a.macAddress)
           << ",\"up\":" << B(a.up)
           << ",\"ifType\":" << Q(a.ifType)
+          << ",\"guid\":" << Q(a.guid)
+          << ",\"dhcpServer\":" << Q(a.dhcpServer)
+          << ",\"netbiosOptions\":" << a.netbiosOptions
+          << ",\"netbiosStatus\":" << StatusS(a.netbiosStatus)
           << ",\"dhcp\":" << B(a.dhcp)
           << ",\"ipv4\":[";
         for (size_t j = 0; j < a.ipv4.size(); ++j) { if (j) o << ","; o << Q(a.ipv4[j]); }
@@ -283,6 +289,35 @@ std::string RenderJson(const AssessmentResult& r) {
         o << "],\"dns\":[";
         for (size_t j = 0; j < a.dns.size(); ++j) { if (j) o << ","; o << Q(a.dns[j]); }
         o << "]}";
+    }
+    o << "],\"security\":{";
+    const auto& network = r.network;
+    const std::pair<const char*, const NetworkSetting*> settings[] = {
+        {"smb1Server", &network.smb1Server}, {"smb1Client", &network.smb1Client},
+        {"smbServerSigning", &network.smbServerSigning}, {"smbClientSigning", &network.smbClientSigning},
+        {"smbGuestLogons", &network.smbGuestLogons}, {"smbEncryption", &network.smbEncryption},
+        {"smbRejectUnencrypted", &network.smbRejectUnencrypted}, {"llmnr", &network.llmnr},
+        {"rdp", &network.rdp}, {"rdpNla", &network.rdpNla}
+    };
+    for (size_t i = 0; i < std::size(settings); ++i) {
+        if (i) o << ",";
+        const auto& [name, setting] = settings[i];
+        o << Q(std::string(name)) << ":{\"enabled\":" << TriS(setting->enabled)
+          << ",\"status\":" << StatusS(setting->status)
+          << ",\"source\":" << Q(setting->source) << ",\"reason\":" << Q(setting->reason) << "}";
+    }
+    o << ",\"rdpPort\":" << network.rdpPort << ",\"rdpPortStatus\":" << StatusS(network.rdpPortStatus)
+      << "},\"tcp4Status\":" << StatusS(network.tcp4Status) << ",\"tcp6Status\":" << StatusS(network.tcp6Status)
+      << ",\"udp4Status\":" << StatusS(network.udp4Status) << ",\"udp6Status\":" << StatusS(network.udp6Status)
+      << ",\"endpointScope\":\"All TCP listeners and UDP port 69 only\",\"endpoints\":[";
+    for (size_t i = 0; i < network.endpoints.size(); ++i) {
+        if (i) o << ",";
+        const auto& endpoint = network.endpoints[i];
+        o << "{\"protocol\":" << Q(endpoint.protocol) << ",\"family\":" << Q(endpoint.family)
+          << ",\"address\":" << Q(endpoint.address) << ",\"port\":" << endpoint.port
+          << ",\"processId\":" << endpoint.processId << ",\"processName\":" << Q(endpoint.processName)
+          << ",\"processStatus\":" << StatusS(endpoint.processStatus) << ",\"binding\":" << Q(endpoint.binding)
+          << ",\"reviewNote\":" << Q(endpoint.reviewNote) << "}";
     }
     o << "]},";
 

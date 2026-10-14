@@ -159,6 +159,14 @@ static void TestScoreAndJson() {
     result.storage.volumes.push_back(volume);
     result.persistence.status = Status::Success;
     ApplicationFinding app; app.status = Status::NotFound; result.applications.push_back(app);
+    result.network.status = Status::Success;
+    for (auto* setting : {&result.network.smb1Server, &result.network.smb1Client,
+                          &result.network.smbGuestLogons, &result.network.llmnr, &result.network.rdp}) {
+        setting->enabled = Tri::No; setting->status = Status::Success;
+    }
+    for (auto* setting : {&result.network.smbServerSigning, &result.network.smbClientSigning}) {
+        setting->enabled = Tri::Yes; setting->status = Status::Success;
+    }
     auto healthy = ComputeScore(result);
     Check(healthy.total == 1000 && healthy.maximum == 1000, "fully satisfied rules retain 1000-point scale");
     Check(Rule(healthy, "os.sac").awardedPoints == 50 && Rule(healthy, "os.sac").maxPoints == 50,

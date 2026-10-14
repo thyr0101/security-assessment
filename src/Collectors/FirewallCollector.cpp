@@ -52,6 +52,11 @@ namespace sa {
             NET_FW_PROFILE2_PUBLIC
         };
         fw.status = Status::Success;
+        long active = 0;
+        if (SUCCEEDED(policy->get_CurrentProfileTypes(&active))) {
+            fw.activeProfiles = static_cast<DWORD>(active);
+            fw.activeProfilesStatus = Status::Success;
+        }
         for (NET_FW_PROFILE_TYPE2 p : profiles) {
             FirewallProfile prof;
             prof.name = ProfileName(static_cast<int>(p));

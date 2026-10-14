@@ -51,7 +51,7 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
     auto& O = a.os;
     auto& C = a.cpu;
 
-    // ---- Hardware Security (max 215) ----
+    // ---- Hardware Security (max 180) ----
     rep.rules.push_back(S.secureBoot.enabled == Tri::Yes
         ? Full({ "hw.secureboot", "Secure Boot", 50, Category::HardwareSecurity },
                "Secure Boot is enabled and UEFI is the firmware.")
@@ -76,20 +76,20 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
     }
 
     rep.rules.push_back(CpuVirtualizationAvailable(C)
-        ? Full({ "hw.virt", "CPU virtualization support", 15, Category::HardwareSecurity },
+        ? Full({ "hw.virt", "CPU virtualization support", 0, Category::HardwareSecurity },
                "CPU virtualization support is available.", "Supported")
-        : Zero({ "hw.virt", "CPU virtualization support", 15, Category::HardwareSecurity }, "Absent",
+        : Zero({ "hw.virt", "CPU virtualization support", 0, Category::HardwareSecurity }, "Absent",
                "CPU virtualization extensions not reported."));
 
     rep.rules.push_back(C.aesni
-        ? Full({ "hw.aes", "Hardware encryption support (AES-NI)", 10, Category::HardwareSecurity },
+        ? Full({ "hw.aes", "Hardware encryption support (AES-NI)", 0, Category::HardwareSecurity },
                "The CPU supports hardware acceleration for AES encryption.", "Supported")
-        : Zero({ "hw.aes", "Hardware encryption support (AES-NI)", 10, Category::HardwareSecurity }, "Absent", "AES-NI not reported."));
+        : Zero({ "hw.aes", "Hardware encryption support (AES-NI)", 0, Category::HardwareSecurity }, "Absent", "AES-NI not reported."));
 
     rep.rules.push_back(C.nx
-        ? Full({ "hw.nx", "CPU memory protection (NX/XD)", 10, Category::HardwareSecurity },
+        ? Full({ "hw.nx", "CPU memory protection (NX/XD)", 0, Category::HardwareSecurity },
                "The CPU can prevent code execution in memory areas reserved for data.", "Supported")
-        : Zero({ "hw.nx", "CPU memory protection (NX/XD)", 10, Category::HardwareSecurity }, "Absent", "NX/XD not reported."));
+        : Zero({ "hw.nx", "CPU memory protection (NX/XD)", 0, Category::HardwareSecurity }, "Absent", "NX/XD not reported."));
 
     if (S.virt.vbsEnabled)
         rep.rules.push_back(Full({ "hw.vbs", "Virtualization security (VBS)", 40, Category::HardwareSecurity },
@@ -280,7 +280,7 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
                                          : "Threat status could not be read."));
     }
 
-    // ---- Network Security (max 100) ----
+    // ---- Network Security (max 180) ----
     bool anyEnabled = false, allEnabled = F.profiles.size() == 3;
     for (auto& p : F.profiles) {
         anyEnabled |= p.enabled && p.status == Status::Success;
@@ -315,7 +315,55 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
         rep.rules.push_back(Zero({ "net.svc", "Windows Firewall service", 20, Category::NetworkSecurity }, "Stopped",
                                  "Firewall service not running."));
 
-    // ---- Encryption (max 165) ----
+    const auto& N = a.network;
+    auto settingRule = [&](const char* id, const char* label, const NetworkSetting& setting,
+                           bool required, const char* pass, const char* fail, const char* explanation) {
+        const R rule{id, label, 10, Category::NetworkSecurity};
+        const bool known = setting.status == Status::Success &&
+            (setting.enabled == Tri::Yes || setting.enabled == Tri::No);
+        const bool satisfied = known && setting.enabled == (required ? Tri::Yes : Tri::No);
+        rep.rules.push_back(satisfied ? Full(rule, explanation, pass)
+            : Zero(rule, known ? fail : setting.status == Status::NotFound ? "Not configured" : "Unknown",
+                known ? explanation : "The required configuration could not be verified; no default is assumed."));
+    };
+    settingRule("net.smb1.server", "Legacy SMB1 server disabled", N.smb1Server, false, "Disabled", "Enabled",
+        "SMB1 server configuration; disabling this legacy protocol reduces file-sharing attack surface.");
+    settingRule("net.smb1.client", "Legacy SMB1 client disabled", N.smb1Client, false, "Disabled", "Available",
+        "SMB1 client driver availability; an absent or disabled redirector cannot be used for legacy SMB1 connections.");
+    settingRule("net.smb.sign.server", "Incoming SMB signing required", N.smbServerSigning, true, "Required", "Not required",
+        "Requiring SMB server signing protects the integrity of incoming file-sharing traffic.");
+    settingRule("net.smb.sign.client", "Outgoing SMB signing required", N.smbClientSigning, true, "Required", "Not required",
+        "Requiring SMB client signing protects the integrity of outgoing file-sharing traffic.");
+    settingRule("net.smb.guest", "Unauthenticated SMB guest blocked", N.smbGuestLogons, false, "Blocked", "Allowed",
+        "Insecure guest logons bypass normal SMB authentication.");
+    settingRule("net.llmnr", "LLMNR disabled by policy", N.llmnr, false, "Disabled", "Allowed",
+        "Disabling multicast name-resolution fallback reduces local name-spoofing opportunities.");
+    bool haveAdapter = false, netbiosUnknown = N.status != Status::Success;
+    bool netbiosEnabled = false, netbiosDhcp = false;
+    for (const auto& adapter : N.adapters) {
+        if (!adapter.up || adapter.isLoopback || adapter.ipv4.empty()) continue;
+        haveAdapter = true;
+        if (adapter.netbiosStatus != Status::Success || adapter.netbiosOptions > 2) netbiosUnknown = true;
+        else if (adapter.netbiosOptions == 1) netbiosEnabled = true;
+        else if (adapter.netbiosOptions == 0) netbiosDhcp = true;
+    }
+    const R netbios{"net.netbios", "NetBIOS off on active IPv4 adapters", 10, Category::NetworkSecurity};
+    rep.rules.push_back(netbiosUnknown ? Zero(netbios, "Unknown", "Not every applicable adapter's NetBIOS configuration could be read.")
+        : netbiosEnabled ? Zero(netbios, "Enabled", "At least one active IPv4 adapter explicitly enables NetBIOS.")
+        : netbiosDhcp ? Zero(netbios, "DHCP controlled", "DHCP-controlled settings do not prove NetBIOS is disabled.")
+        : Full(netbios, haveAdapter ? "NetBIOS is explicitly disabled on every active IPv4 adapter."
+            : "No active non-loopback IPv4 adapters require this check.", haveAdapter ? "Disabled" : "Not applicable"));
+    const R rdp{"net.rdp", "RDP disabled or authentication required", 10, Category::NetworkSecurity};
+    const bool rdpKnown = N.rdp.status == Status::Success && (N.rdp.enabled == Tri::Yes || N.rdp.enabled == Tri::No);
+    const bool nlaKnown = N.rdpNla.status == Status::Success && (N.rdpNla.enabled == Tri::Yes || N.rdpNla.enabled == Tri::No);
+    rep.rules.push_back(rdpKnown && N.rdp.enabled == Tri::No
+        ? Full(rdp, "Remote Desktop connections are disabled by configuration.", "RDP disabled")
+        : rdpKnown && nlaKnown && N.rdpNla.enabled == Tri::Yes
+        ? Full(rdp, "Remote Desktop is configured to require Network Level Authentication; firewall scope is a separate control.", "NLA required")
+        : Zero(rdp, rdpKnown && nlaKnown ? "NLA not required" : "Unknown",
+            "Enabled Remote Desktop must require Network Level Authentication to receive these points."));
+
+    // ---- Encryption (max 160) ----
     bool anyBitlockerOn = false, allFixedOn = a.storage.status == Status::Success;
     bool anyBitlockerUnknown = a.storage.status != Status::Success;
     int fixedCount = 0;
@@ -351,9 +399,9 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
                                      : "BitLocker not enabled on any fixed volume."));
 
     rep.rules.push_back(S.tpm.present
-        ? Full({ "enc.tpm", "TPM available to protect keys", 65, Category::Encryption },
+        ? Full({ "enc.tpm", "TPM available to protect keys", 60, Category::Encryption },
                "A TPM security chip is available to store and protect encryption keys.", "Available")
-        : Zero({ "enc.tpm", "TPM available to protect keys", 65, Category::Encryption }, "Absent",
+        : Zero({ "enc.tpm", "TPM available to protect keys", 60, Category::Encryption }, "Absent",
                "No TPM available for key protection."));
 
     // ---- Account Security (max 80) ----
@@ -395,24 +443,24 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
         rep.rules.push_back(std::move(s));
     }
 
-    // ---- Hardening / Software Hygiene (max 40) ----
+    // ---- Hardening / Software Hygiene (informational) ----
     rep.rules.push_back(a.persistence.status != Status::Success
-        ? Zero({ "hyg.startup", "Startup application scan", 20, Category::SoftwareHygiene },
+        ? Zero({ "hyg.startup", "Startup application scan", 0, Category::SoftwareHygiene },
                "Unknown", "Startup inventory could not be completed.")
         : a.persistence.entries.empty()
-        ? Full({ "hyg.startup", "Startup application scan", 20, Category::SoftwareHygiene },
+        ? Full({ "hyg.startup", "Startup application scan", 0, Category::SoftwareHygiene },
                "The selected startup locations were checked; no entries were found.", "Complete")
-        : Full({ "hyg.startup", "Startup application scan", 20, Category::SoftwareHygiene },
+        : Full({ "hyg.startup", "Startup application scan", 0, Category::SoftwareHygiene },
                std::to_string(a.persistence.entries.size()) + " startup entries found in the selected locations.", "Complete"));
 
     const bool inventoryComplete = !a.applications.empty() && std::all_of(
         a.applications.begin(), a.applications.end(), [](const ApplicationFinding& app) {
             return app.status == Status::Success || app.status == Status::NotFound;
         });
-    rep.rules.push_back(inventoryComplete ? Full({ "hyg.appinv", "Selected application scan", 20,
+    rep.rules.push_back(inventoryComplete ? Full({ "hyg.appinv", "Selected application scan", 0,
                                Category::SoftwareHygiene },
                              "Installation status was checked for every application in the configured list.", "Complete")
-        : Zero({ "hyg.appinv", "Selected application scan", 20, Category::SoftwareHygiene },
+        : Zero({ "hyg.appinv", "Selected application scan", 0, Category::SoftwareHygiene },
                "Unknown", "Application inventory could not be completed."));
 
     // Failed collection must not become a definite disabled/absent state or earn points.

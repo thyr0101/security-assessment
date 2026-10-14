@@ -87,7 +87,9 @@ Status RegistryReader::GetMultiSz(const wchar_t* name, std::vector<std::wstring>
     if (buf.size() % sizeof(wchar_t)) return Status::Error;
     std::wstring data(buf.size() / sizeof(wchar_t), L'\0');
     if (!buf.empty()) std::memcpy(data.data(), buf.data(), buf.size());
-    if (data.size() < 2 || data[data.size() - 1] != L'\0' || data[data.size() - 2] != L'\0')
+    // An empty REG_MULTI_SZ is a single null; nonempty lists need two.
+    if (data.empty() || data.back() != L'\0' ||
+        (data.size() > 1 && data[data.size() - 2] != L'\0'))
         return Status::Error;
     std::vector<std::wstring> values;
     for (size_t start = 0; start < data.size() && data[start];) {
@@ -114,7 +116,7 @@ Status RegistryReader::EnumValues(std::vector<std::pair<std::wstring, DWORD>>& o
         DWORD type = 0;
         LSTATUS st = ::RegEnumValueW(key_.get(), idx, name.data(), &nameLen, nullptr, &type, nullptr, nullptr);
         if (st == ERROR_NO_MORE_ITEMS) break;
-        if (st == ERROR_MORE_DATA) { ++idx; continue; }
+        if (st == ERROR_MORE_DATA) return Status::Error;
         if (st != ERROR_SUCCESS) {
             if (st == ERROR_ACCESS_DENIED) return Status::AccessDenied;
             return Status::Error;

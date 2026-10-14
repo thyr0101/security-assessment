@@ -69,6 +69,11 @@ static void TestRegistry(Fixture& fixture) {
           "registry threshold counts");
     for (const auto& definition : DefaultRegistryScans())
         Check(!definition.name.empty() && definition.root && !definition.subkey.empty(), "no empty default registry definitions");
+    const wchar_t empty[] = L"";
+    Check(::RegSetValueExW(fixture.key.get(), L"empty", 0, REG_MULTI_SZ,
+        reinterpret_cast<const BYTE*>(empty), sizeof(empty)) == ERROR_SUCCESS, "write empty multi-string");
+    strings = {L"previous"};
+    Check(reader.GetMultiSz(L"empty", strings) == Status::Success && strings.empty(), "single-null empty REG_MULTI_SZ is valid");
 }
 
 static void TestFiles(Fixture& fixture) {
@@ -87,6 +92,10 @@ static void TestFiles(Fixture& fixture) {
           "deduplicate app paths and exclude directories");
     Check(apps[0].apps[0].locations[0].sha256 == digest, "application hash");
     Check(CollectApplications(definitions, false)[0].apps[0].locations[0].sha256.empty(), "hash suppression");
+    const auto relative = CollectApplications({{L"relative", {L"Example|" + fs::relative(app).wstring(),
+        L"Example|" + app.wstring()}}}, false);
+    Check(relative[0].apps.size() == 1 && relative[0].apps[0].locations.size() == 1,
+          "relative and absolute paths must identify one executable");
     const auto scans = RunDirectoryScans({{L"flat", fixture.dir.wstring(), 1, false},
         {L"recursive", fixture.dir.wstring(), 1, true}, {L"missing", (fixture.dir / L"missing").wstring(), 0, false}});
     Check(scans[0].fileCount == 1 && !scans[0].exceeded, "flat directory scan");
@@ -110,6 +119,7 @@ static void TestScoreAndJson() {
     auto& s = result.security;
     s.tpm.status = Status::Success; s.tpm.present = s.tpm.ready = true; s.tpm.specVersion = L"2.0";
     s.secureBoot.enabled = Tri::Yes;
+    s.secureBoot.status = Status::Success;
     s.virt.status = Status::Success;
     s.virt.runningServicesKnown = s.virt.vbsEnabled = s.virt.hvciEnabled = true;
     s.uac.status = Status::Success; s.uac.enabled = s.uac.consentPromptAdmin = true;
@@ -117,6 +127,8 @@ static void TestScoreAndJson() {
     s.smartAppControlOn = s.isElevated = s.windowsHelloAvailable = true;
     auto& d = result.defender;
     d.status = Status::Success;
+    d.enabledStatus = d.realTimeProtectionStatus = d.behaviorMonitorStatus = d.ioavStatus =
+        d.cloudProtectionStatus = d.tamperProtectionStatus = Status::Success;
     d.installed = d.enabled = d.realTimeProtection = d.behaviorMonitor = d.ioav = true;
     d.cloudProtection = d.tamperProtection = d.threatsKnown = true;
     result.firewall.status = Status::Success; result.firewall.serviceRunning = true;
@@ -126,6 +138,8 @@ static void TestScoreAndJson() {
         result.firewall.profiles.push_back(p);
     }
     StorageVolume volume; volume.driveType = L"Fixed"; volume.bitLockerState = L"On";
+    volume.bitLockerStatus = Status::Success;
+    result.storage.status = Status::Success;
     result.storage.volumes.push_back(volume);
     result.persistence.status = Status::Success;
     ApplicationFinding app; app.status = Status::NotFound; result.applications.push_back(app);
@@ -135,6 +149,10 @@ static void TestScoreAndJson() {
     Check(sum == healthy.total, "rule sum matches score");
     s.tpm.specVersion = L"1.2";
     Check(Rule(ComputeScore(result), "hw.tpm2").awardedPoints == 20, "TPM 1.2 must not earn TPM 2.0 points");
+    s.tpm.specVersion = L"12.0";
+    Check(Rule(ComputeScore(result), "hw.tpm2").awardedPoints == 20, "TPM version matching must use the complete version");
+    s.tpm.specVersion = L"2.0, 0, 1.59";
+    Check(Rule(ComputeScore(result), "hw.tpm2").awardedPoints == 50, "TPM 2.0 with revision metadata earns full credit");
     result.firewall.profiles[0].defaultInbound = 2;
     Check(Rule(ComputeScore(result), "net.in").awardedPoints == 0, "unknown firewall action must not count as blocked");
     s.virt.runningServicesKnown = false;
@@ -169,6 +187,16 @@ static void TestComAndWmi() {
     _variant_t overflow(L"18446744073709551616");
     Check(SUCCEEDED(object->Put(L"Probe", 0, &overflow, CIM_STRING)), "set overflowing integer");
     Check(!WmiGetUInt(object.Get(), L"Probe", number), "reject overflowing uint64");
+    number = 123;
+    _variant_t negative(static_cast<long>(-1));
+    Check(SUCCEEDED(object->Put(L"SignedProbe", 0, &negative, CIM_SINT32)), "set signed negative property");
+    Check(!WmiGetUInt(object.Get(), L"SignedProbe", number) && number == 123, "negative signed WMI values must not become huge unsigned values");
+    Check(SUCCEEDED(object->Put(L"UnsignedProbe", 0, &negative, CIM_UINT32)), "set unsigned high-bit property");
+    Check(WmiGetUInt(object.Get(), L"UnsignedProbe", number) && number == ULONG_MAX, "CIM uint32 retains its full range despite VT_I4 representation");
+    _variant_t nullText; nullText.vt = VT_NULL;
+    Check(SUCCEEDED(object->Put(L"Probe", 0, &nullText, CIM_STRING)), "set NULL string");
+    std::wstring text = L"unchanged";
+    Check(!WmiGetString(object.Get(), L"Probe", text) && text == L"unchanged", "NULL string is unavailable and preserves caller output");
     _variant_t array;
     array.vt = VT_ARRAY | VT_I4;
     array.parray = ::SafeArrayCreateVector(VT_I4, 5, 2);
@@ -187,6 +215,53 @@ static void TestComAndWmi() {
     WmiObjects rows;
     Check(wmi.Query(L"SELECT * FROM ClassThatDoesNotExist_SARegression", rows.items()) != Status::Success && rows.items().empty(),
           "failed WMI query must not return success");
+}
+
+static void TestPartialCollection() {
+    AssessmentResult result;
+    auto& d = result.defender;
+    d.status = Status::Success;
+    d.installed = d.enabled = d.cloudProtection = true;
+    d.enabledStatus = Status::Success;
+    auto score = ComputeScore(result);
+    Check(Rule(score, "mp.defender").awardedPoints == 40, "known Defender status survives missing optional properties");
+    Check(Rule(score, "mp.cloud").state == "Unknown" && Rule(score, "mp.cloud").awardedPoints == 0,
+          "unknown cloud preference cannot be disabled or earn credit from a stale value");
+    Check(Rule(score, "mp.rtp").state == "Unknown", "missing real-time status is not disabled");
+    d.cloudProtectionStatus = Status::Success;
+    Check(Rule(ComputeScore(result), "mp.cloud").awardedPoints == 20, "known cloud preference retains its credit");
+    d.cloudProtection = false;
+    Check(Rule(ComputeScore(result), "mp.cloud").state == "Disabled", "explicitly disabled cloud preference stays disabled");
+
+    StorageVolume volume;
+    volume.driveType = L"Fixed"; volume.bitLockerState = L"On"; volume.bitLockerStatus = Status::AccessDenied;
+    result.storage.status = Status::Success;
+    result.storage.volumes = {volume};
+    Check(Rule(ComputeScore(result), "enc.bl").awardedPoints == 0 && Rule(ComputeScore(result), "enc.bl").state == "Unknown",
+          "unreadable BitLocker status must not earn points from stale On state");
+    result.storage.volumes[0].bitLockerStatus = Status::Success;
+    Check(Rule(ComputeScore(result), "enc.bl").awardedPoints == 100, "complete encrypted inventory receives full credit");
+    result.storage.status = Status::AccessDenied;
+    Check(Rule(ComputeScore(result), "enc.bl").awardedPoints == 50, "partial volume enumeration cannot receive full credit");
+    result.storage.volumes.clear();
+    Check(Rule(ComputeScore(result), "enc.bl").state == "Unknown", "failed empty inventory does not mean no fixed volumes");
+    result.storage.status = Status::Success;
+    result.storage.volumes = {volume}; result.storage.volumes[0].bitLockerStatus = Status::Success;
+    result.storage.volumes.push_back(StorageVolume{});
+    Check(Rule(ComputeScore(result), "enc.bl").awardedPoints == 50, "unknown volume type prevents full encryption coverage credit");
+    result.security.secureBoot.enabled = Tri::Yes;
+    Check(Rule(ComputeScore(result), "hw.secureboot").awardedPoints == 0, "failed Secure Boot read cannot earn stale credit");
+    result.security.virt.runningServicesKnown = result.security.virt.hvciEnabled = true;
+    Check(Rule(ComputeScore(result), "hw.hvci").awardedPoints == 0, "failed virtualization read cannot earn stale HVCI credit");
+    result.applications.push_back(ApplicationFinding{});
+    result.applications[0].name = L"Blocked app inventory"; result.applications[0].status = Status::AccessDenied;
+    result.score = ComputeScore(result);
+    std::wostringstream captured;
+    auto* old = std::wcout.rdbuf(captured.rdbuf());
+    try { RenderConsole(result); } catch (...) { std::wcout.rdbuf(old); throw; }
+    std::wcout.rdbuf(old);
+    Check(captured.str().find(L"Incomplete (AccessDenied)") != std::wstring::npos, "blocked application scan is displayed as incomplete");
+    std::ofstream("partial-output.json", std::ios::binary) << RenderJson(result);
 }
 
 static void TestRegisteredAntivirus() {
@@ -241,6 +316,7 @@ static void TestRegisteredAntivirus() {
     result.antivirus.products[0].state = AntivirusState::Enabled;
     Check(ComputeScore(result).total == 200, "registered Defender fallback works when its WMI provider is unavailable");
     result.defender.status = Status::Success; result.defender.enabled = result.defender.installed = true;
+    result.defender.enabledStatus = Status::Success;
     auto defenderOnly = ComputeScore(result);
     Check(!defenderOnly.registeredAntivirusScoring && Rule(defenderOnly, "mp.defender").awardedPoints == 40,
           "normal Defender-only scoring is preserved");
@@ -258,6 +334,7 @@ int main() {
         TestFiles(fixture);
         TestScoreAndJson();
         TestRegisteredAntivirus();
+        TestPartialCollection();
         TestComAndWmi();
         std::cout << "All native regressions passed.\n";
         return 0;

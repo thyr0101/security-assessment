@@ -132,13 +132,19 @@ std::string RenderJson(const AssessmentResult& r) {
     o << "\"defender\":{"
       << "\"installed\":" << B(r.defender.installed) << ","
       << "\"enabled\":" << B(r.defender.enabled) << ","
+      << "\"enabledStatus\":" << StatusS(r.defender.enabledStatus) << ","
       << "\"realTimeProtection\":" << B(r.defender.realTimeProtection) << ","
+      << "\"realTimeProtectionStatus\":" << StatusS(r.defender.realTimeProtectionStatus) << ","
       << "\"behaviorMonitor\":" << B(r.defender.behaviorMonitor) << ","
+      << "\"behaviorMonitorStatus\":" << StatusS(r.defender.behaviorMonitorStatus) << ","
       << "\"ioav\":" << B(r.defender.ioav) << ","
+      << "\"ioavStatus\":" << StatusS(r.defender.ioavStatus) << ","
       << "\"cloudProtection\":" << B(r.defender.cloudProtection) << ","
+      << "\"cloudProtectionStatus\":" << StatusS(r.defender.cloudProtectionStatus) << ","
       << "\"threatsKnown\":" << B(r.defender.threatsKnown) << ","
       << "\"threatsCount\":" << r.defender.threatsCount << ","
       << "\"tamperProtection\":" << B(r.defender.tamperProtection) << ","
+      << "\"tamperProtectionStatus\":" << StatusS(r.defender.tamperProtectionStatus) << ","
       << "\"amEngineVersion\":" << Q(r.defender.amEngineVersion) << ","
       << "\"amRunningMode\":" << Q(r.defender.amRunningMode) << ","
       << "\"periodicScanning\":" << TriS(r.defender.periodicScanning) << ","
@@ -247,7 +253,7 @@ std::string RenderJson(const AssessmentResult& r) {
           << ",\"startType\":" << Q(s.startType)
           << ",\"status\":" << StatusS(s.status) << "}";
     }
-    o << "],";
+    o << "],\"servicesStatus\":" << StatusS(r.services.status) << ",";
 
     // applications
     o << "\"applications\":[";
@@ -316,7 +322,7 @@ std::string RenderJson(const AssessmentResult& r) {
           << ",\"name\":" << Q(e.name)
           << ",\"command\":" << Q(e.command) << "}";
     }
-    o << "],";
+    o << "],\"persistenceStatus\":" << StatusS(r.persistence.status) << ",";
 
     // privacy
     o << "\"privacy\":[";

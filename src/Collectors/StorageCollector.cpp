@@ -101,7 +101,7 @@ static void CollectPhysicalDisks(StorageInfo& s) {
         q2.PropertyId = StorageDeviceSeekPenaltyProperty;
         q2.QueryType = PropertyStandardQuery;
         if (::DeviceIoControl(h.get(), IOCTL_STORAGE_QUERY_PROPERTY,
-                              &q2, sizeof(q2), &spd, sizeof(spd), &ret, nullptr)) {
+                              &q2, sizeof(q2), &spd, sizeof(spd), &ret, nullptr) && ret >= sizeof(spd)) {
             if (!spd.IncursSeekPenalty && disk.mediaType == L"Unknown") disk.mediaType = L"SSD";
             else if (spd.IncursSeekPenalty && disk.mediaType == L"Unknown") disk.mediaType = L"HDD";
         }
@@ -113,7 +113,8 @@ static void CollectPhysicalDisks(StorageInfo& s) {
         DWORD geoRet = 0;
         if (::DeviceIoControl(h.get(), IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
                               nullptr, 0, geo.data(), (DWORD)geo.size(), &geoRet, nullptr) &&
-            geoRet >= sizeof(DISK_GEOMETRY_EX))
+            geoRet >= sizeof(DISK_GEOMETRY_EX) &&
+            reinterpret_cast<DISK_GEOMETRY_EX*>(geo.data())->DiskSize.QuadPart >= 0)
             disk.sizeBytes = (unsigned long long)
                 reinterpret_cast<DISK_GEOMETRY_EX*>(geo.data())->DiskSize.QuadPart;
 

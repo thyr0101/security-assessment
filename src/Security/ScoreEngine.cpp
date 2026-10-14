@@ -60,7 +60,7 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
                "Secure Boot is not enabled or could not be verified."));
 
     if (S.tpm.present && S.tpm.ready) {
-        bool v2 = S.tpm.specVersion.find(L"2.0") != std::wstring::npos;
+        const bool v2 = Trim(Split(S.tpm.specVersion, L',').front()) == L"2.0";
         rep.rules.push_back(v2
             ? Full({ "hw.tpm2", "TPM 2.0 present & ready", 50, Category::HardwareSecurity }, "TPM 2.0 is present and ready.")
             : Partial({ "hw.tpm2", "TPM 2.0 present & ready", 50, Category::HardwareSecurity }, 20,
@@ -270,19 +270,25 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
                                  "Firewall service not running."));
 
     // ---- Encryption (max 175) ----
-    bool anyBitlockerOn = false, allFixedOn = true, anyBitlockerUnknown = false;
+    bool anyBitlockerOn = false, allFixedOn = a.storage.status == Status::Success;
+    bool anyBitlockerUnknown = a.storage.status != Status::Success;
     int fixedCount = 0;
     for (auto& v : a.storage.volumes) {
+        if (v.driveType == L"Unknown" || v.driveType.empty()) {
+            allFixedOn = false;
+            anyBitlockerUnknown = true;
+        }
         if (v.driveType != L"Fixed") continue;
         ++fixedCount;
-        if (v.bitLockerState == L"On") anyBitlockerOn = true;
+        const bool known = v.bitLockerStatus == Status::Success;
+        if (known && v.bitLockerState == L"On") anyBitlockerOn = true;
         else allFixedOn = false;
-        if (v.bitLockerState != L"On" && v.bitLockerState != L"Off") anyBitlockerUnknown = true;
+        if (!known || (v.bitLockerState != L"On" && v.bitLockerState != L"Off")) anyBitlockerUnknown = true;
     }
     if (fixedCount == 0)
         rep.rules.push_back(Zero({ "enc.bl", "BitLocker on all fixed volumes", 100,
-                                   Category::Encryption }, "NoVolumes",
-                                 "No fixed volumes were enumerated."));
+                                   Category::Encryption }, anyBitlockerUnknown ? "Unknown" : "NoVolumes",
+                                 "No fixed volumes could be verified."));
     else if (allFixedOn)
         rep.rules.push_back(Full({ "enc.bl", "BitLocker on all fixed volumes", 100,
                                    Category::Encryption },
@@ -290,7 +296,7 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
     else if (anyBitlockerOn)
         rep.rules.push_back(Partial({ "enc.bl", "BitLocker on all fixed volumes", 100, Category::Encryption },
                                     50, "Partial",
-                                    "BitLocker enabled on some but not all fixed volumes."));
+                                    "BitLocker protection confirmed on some volumes; full coverage could not be verified."));
     else
         rep.rules.push_back(Zero({ "enc.bl", "BitLocker on all fixed volumes", 100, Category::Encryption },
                                  anyBitlockerUnknown ? "Unknown" : "Disabled",
@@ -373,10 +379,17 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
         else if (rule.id == "hw.tpm2" || rule.id == "enc.tpm")
             unknown = S.tpm.status != Status::Success && S.tpm.status != Status::NotFound;
         else if (rule.id == "hw.vbs") unknown = S.virt.status != Status::Success;
-        else if (rule.id == "hw.hvci") unknown = !S.virt.runningServicesKnown;
+        else if (rule.id == "hw.hvci") unknown = S.virt.status != Status::Success || !S.virt.runningServicesKnown;
+        else if (rule.id == "hw.secureboot") unknown = S.secureBoot.status != Status::Success;
         else if (rule.id == "os.dep") unknown = S.dep.depEnabled == Tri::Unknown;
         else if (rule.id == "net.fw") unknown = F.status != Status::Success && !anyEnabled;
         else if (rule.id == "net.svc") unknown = F.serviceStatus != Status::Success;
+        if (rule.id == "mp.defender") unknown |= D.enabledStatus != Status::Success;
+        else if (rule.id == "mp.rtp") unknown |= D.realTimeProtectionStatus != Status::Success;
+        else if (rule.id == "mp.bm") unknown |= D.behaviorMonitorStatus != Status::Success;
+        else if (rule.id == "mp.ioav") unknown |= D.ioavStatus != Status::Success;
+        else if (rule.id == "mp.cloud") unknown |= D.cloudProtectionStatus != Status::Success;
+        else if (rule.id == "mp.tamper") unknown |= D.tamperProtectionStatus != Status::Success;
         if (unknown) {
             rule.awardedPoints = 0;
             rule.state = "Unknown";

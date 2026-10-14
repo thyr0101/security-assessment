@@ -84,7 +84,11 @@ cmake --build build --config Release
 - `--no-hash`: skips executable hashing and leaves application SHA-256 fields empty.
 - `--help` / `-h`: prints usage.
 
+Unrecognized options return exit code 2 with a usage message.
+
 Collection uses native Windows APIs, COM/WMI, and the C++ standard library. No external commands, network services, or third-party runtime libraries are required. WMI and registry access can be restricted without elevation; unavailable checks are reported as unknown. HVCI configuration is distinguished from confirmed running state, and Smart App Control evaluation does not count as enforcement.
+
+Defender JSON fields have individual status companions (for example, `cloudProtectionStatus`) because optional property reads can fail even when the main status query succeeds. `servicesStatus` and `persistenceStatus` describe inventory completeness. Full BitLocker coverage credit requires complete volume enumeration and successful protection-status reads.
 
 ## Registered antivirus fallback
 

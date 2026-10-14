@@ -22,6 +22,18 @@ Reviewed all source/header files, both build definitions, and the README. The ap
 
 ## Compatibility
 
+### Follow-up bug review
+
+- Defender fields now retain individual read statuses. Missing real-time, behavior, IOAV, cloud, and tamper properties are reported as unknown and cannot earn points from stale values. A running service alone does not establish active antivirus protection.
+- BitLocker full-coverage scoring requires complete volume enumeration and successful per-volume status reads. Unknown volume types prevent full credit. Failed Secure Boot/HVCI collection cannot earn stale credit, and TPM version matching uses the complete version token.
+- Startup folders are resolved through the native known-folder API, including redirected folders. Directories, `desktop.ini`, and non-string Run values are excluded. Unreadable Run commands and service reads preserve incomplete inventory status; JSON exposes the aggregate statuses.
+- WMI unsigned extraction rejects negative signed values while preserving the full CIM uint32 range. NULL string properties are unavailable. Registry reads accept the documented single-null empty multi-string, and enumeration errors are retained.
+- Application resolution normalizes absolute paths before deduplication. Incomplete application scans display their status. Windows directory queries resize their buffers, storage descriptor reads validate returned lengths, and unknown CLI options return an error.
+
+Validation: CMake Release and native MSBuild Debug builds passed; native MSBuild Release with `/analyze` reported no warnings. Native regressions and the live smoke harness passed, including partial-data scoring, WMI signed/unsigned conversion, empty registry lists, path deduplication, JSON parsing, both hash modes, invalid options, and redirected console output. Live checks ran without elevation; encryption failures and multiple-antivirus scenarios use synthetic fixtures.
+
+References: [WMI numeric representations](https://learn.microsoft.com/en-us/windows/win32/wmisdk/numbers), [registry string formats](https://learn.microsoft.com/en-us/windows/win32/sysinfo/registry-value-types), [known-folder resolution](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/nf-shlobj_core-shgetknownfolderpath), and [Windows directory buffer sizing](https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-getwindowsdirectoryw).
+
 ### Registered antivirus support
 
 Added native Windows Security Center product enumeration, independent 200-point product scores, and a capped 200-point malware category fallback. Defender-only detailed scoring remains available. Defender periodic scanning is informational and uses its reported running mode; missing evidence stays unknown. Both console and JSON expose the results. Synthetic coverage includes multiple enabled/disabled products, inaccessible states, Defender provider failure, and periodic-scanning score independence.

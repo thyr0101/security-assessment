@@ -5,6 +5,9 @@
 #include <filesystem>
 #include <vector>
 #include <type_traits>
+#include <shlobj.h>
+
+#pragma comment(lib, "shell32.lib")
 
 namespace fs = std::filesystem;
 
@@ -27,44 +30,42 @@ static void AddRunKey(PersistenceReport& rep, HKEY root, const std::wstring& pat
         e.location = display;
         e.name = name;
         std::wstring cmd;
-        if (r.GetString(name.c_str(), cmd) == Status::Success) e.command = cmd;
-        else { std::vector<BYTE> b; if (r.GetBinary(name.c_str(), b) == Status::Success) e.command = L"<binary>"; }
+        if (type != REG_SZ && type != REG_EXPAND_SZ) continue;
+        const Status read = r.GetString(name.c_str(), cmd);
+        if (read == Status::Success) e.command = cmd;
+        else rep.status = read;
         rep.entries.push_back(std::move(e));
     }
 }
 
 static void ScanStartupFolders(PersistenceReport& rep) {
-    wchar_t buf[MAX_PATH]{};
-    DWORD n = ::GetEnvironmentVariableW(L"APPDATA", buf, MAX_PATH);
-    if (n && n < MAX_PATH) {
-        fs::path dir = fs::path(buf) / L"Microsoft\\Windows\\Start Menu\\Programs\\Startup";
+    auto scan = [&](REFKNOWNFOLDERID id, const wchar_t* location) {
+        PWSTR path = nullptr;
+        const HRESULT hr = ::SHGetKnownFolderPath(id, KF_FLAG_DONT_VERIFY, nullptr, &path);
+        struct PathGuard { PWSTR path; ~PathGuard() { ::CoTaskMemFree(path); } } guard{path};
+        if (FAILED(hr) || !path) {
+            rep.status = hr == E_ACCESSDENIED ? Status::AccessDenied : Status::Unavailable;
+            return;
+        }
+        const fs::path dir(path);
         std::error_code ec;
         if (fs::exists(dir, ec)) {
             for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+                if (IEquals(it->path().filename().wstring(), L"desktop.ini")) continue;
+                const bool regular = it->is_regular_file(ec);
+                if (ec) break;
+                if (!regular) continue;
                 PersistenceEntry e;
-                e.location = L"Startup (user)";
+                e.location = location;
                 e.name = it->path().filename().wstring();
                 e.command = it->path().wstring();
                 rep.entries.push_back(std::move(e));
             }
         }
         if (ec) rep.status = StatusFromWin32(static_cast<DWORD>(ec.value()));
-    }
-    n = ::GetEnvironmentVariableW(L"ProgramData", buf, MAX_PATH);
-    if (n && n < MAX_PATH) {
-        fs::path dir = fs::path(buf) / L"Microsoft\\Windows\\Start Menu\\Programs\\Startup";
-        std::error_code ec;
-        if (fs::exists(dir, ec)) {
-            for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
-                PersistenceEntry e;
-                e.location = L"Startup (machine)";
-                e.name = it->path().filename().wstring();
-                e.command = it->path().wstring();
-                rep.entries.push_back(std::move(e));
-            }
-        }
-        if (ec) rep.status = StatusFromWin32(static_cast<DWORD>(ec.value()));
-    }
+    };
+    scan(FOLDERID_Startup, L"Startup (user)");
+    scan(FOLDERID_CommonStartup, L"Startup (machine)");
 }
 
 PersistenceReport CollectPersistence() {
@@ -205,11 +206,16 @@ ServiceReport CollectSecurityServices() {
     ServiceReport rep;
     ServiceHandle scm(::OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT));
     if (!scm) { rep.status = StatusFromWin32(::GetLastError()); return rep; }
+    rep.status = Status::Success;
     for (auto* name : kSecurityServices) {
         ServiceEntry e;
         e.name = name;
         ServiceHandle svc(::OpenServiceW(scm.get(), name, SERVICE_QUERY_STATUS | SERVICE_QUERY_CONFIG));
-        if (!svc) { e.status = StatusFromWin32(::GetLastError()); rep.entries.push_back(std::move(e)); continue; }
+        if (!svc) {
+            e.status = StatusFromWin32(::GetLastError());
+            if (e.status != Status::NotFound) rep.status = e.status;
+            rep.entries.push_back(std::move(e)); continue;
+        }
         e.status = Status::Success;
         SERVICE_STATUS_PROCESS ssp{}; DWORD needed = 0;
         if (::QueryServiceStatusEx(svc.get(), SC_STATUS_PROCESS_INFO, (LPBYTE)&ssp, sizeof(ssp), &needed))
@@ -229,9 +235,9 @@ ServiceReport CollectSecurityServices() {
             else e.status = StatusFromWin32(::GetLastError());
         }
         else e.status = sizeRead ? Status::Error : StatusFromWin32(configError);
+        if (e.status != Status::Success) rep.status = e.status;
         rep.entries.push_back(std::move(e));
     }
-    rep.status = Status::Success;
     return rep;
 }
 

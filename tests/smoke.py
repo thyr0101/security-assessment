@@ -9,7 +9,11 @@ import time
 
 def run(executable, *args, cwd=None):
     started = time.perf_counter()
-    result = subprocess.run([str(executable), *args], cwd=cwd, capture_output=True, timeout=180, check=True)
+    try:
+        result = subprocess.run([str(executable), *args], cwd=cwd, capture_output=True, timeout=180, check=True)
+    except subprocess.CalledProcessError as error:
+        detail = error.stderr.decode('utf-8-sig', errors='replace').strip()
+        raise RuntimeError(f"{executable.name} exited with {error.returncode}: {detail}") from error
     return result.stdout.decode('utf-8-sig'), time.perf_counter() - started
 
 
@@ -33,10 +37,16 @@ def main():
         assert [p['awardedPoints'] for p in antivirus['score']['antivirusScores']] == [200, 0, 0]
         assert antivirus['score']['antivirusScores'][0]['name'] == 'Example "Antivirus" A'
         assert antivirus['score']['total'] == 200 and antivirus['score']['maximum'] == 1000
+        partial = json.loads((Path(scratch) / 'partial-output.json').read_text(encoding='utf-8'))
+        assert partial['defender']['cloudProtectionStatus'] == 'Success'
+        assert partial['defender']['realTimeProtectionStatus'] == 'Unavailable'
+        assert partial['servicesStatus'] == 'Error' and partial['persistenceStatus'] == 'Error'
         print(output.strip())
 
     help_text, _ = run(app, '--help')
     assert 'Usage:' in help_text
+    invalid = subprocess.run([str(app), '--no-hahs'], capture_output=True, timeout=10)
+    assert invalid.returncode == 2 and b'Unknown option:' in invalid.stderr and not invalid.stdout
     json_text, no_hash_time = run(app, '--json', '--no-hash')
     report = json.loads(json_text)
     expected = {'system', 'hardware', 'security', 'defender', 'firewall', 'storage', 'network',
@@ -49,6 +59,12 @@ def main():
     for product, score in zip(report['antivirus']['products'], report['score']['antivirusScores']):
         assert score['maxPoints'] == 200
         assert score['awardedPoints'] == (200 if product['status'] == 'Success' and product['state'] == 'Enabled' else 0)
+    rules = {rule['id']: rule for rule in report['score']['rules']}
+    for field, rule_id in [('enabled', 'mp.defender'), ('realTimeProtection', 'mp.rtp'),
+                           ('behaviorMonitor', 'mp.bm'), ('ioav', 'mp.ioav'),
+                           ('cloudProtection', 'mp.cloud'), ('tamperProtection', 'mp.tamper')]:
+        if rule_id in rules and report['defender'][field + 'Status'] != 'Success':
+            assert rules[rule_id]['state'] == 'Unknown' and rules[rule_id]['awardedPoints'] == 0
     assert len({s['name'].lower() for s in report['services']}) == len(report['services'])
     assert all(f['name'] for f in report['registryFindings'])
     assert all(not loc['sha256'] for group in report['applications'] for app_item in group['apps'] for loc in app_item['locations'])

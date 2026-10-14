@@ -92,18 +92,20 @@ DefenderInfo CollectDefenderInfo() {
             d.installed = true;
             for (auto* o : objs) {
                 bool b = false;
-                bool haveSvc = WmiGetBool(o, L"AMServiceEnabled", b);
-                if (haveSvc) d.enabled = b;
                 if (WmiGetBool(o, L"AntivirusEnabled", b)) {
                     d.antivirusEnabled = b;
                     d.enabled = b; // A running Defender service can be passive alongside another AV.
+                    d.enabledStatus = Status::Success;
                 }
+                auto flag = [&](const wchar_t* name, bool& value, Status& status) {
+                    status = WmiGetBool(o, name, value) ? Status::Success : Status::Unavailable;
+                };
                 if (WmiGetBool(o, L"AntispywareEnabled", b))        d.antispywareEnabled = b;
-                if (WmiGetBool(o, L"RealTimeProtectionEnabled", b)) d.realTimeProtection = b;
-                if (WmiGetBool(o, L"BehaviorMonitorEnabled", b))    d.behaviorMonitor = b;
-                if (WmiGetBool(o, L"IoavProtectionEnabled", b))     d.ioav = b;
+                flag(L"RealTimeProtectionEnabled", d.realTimeProtection, d.realTimeProtectionStatus);
+                flag(L"BehaviorMonitorEnabled", d.behaviorMonitor, d.behaviorMonitorStatus);
+                flag(L"IoavProtectionEnabled", d.ioav, d.ioavStatus);
                 if (WmiGetBool(o, L"OnAccessProtectionEnabled", b)) d.onAccessProtection = b;
-                if (WmiGetBool(o, L"IsTamperProtected", b))         d.tamperProtection = b;
+                flag(L"IsTamperProtected", d.tamperProtection, d.tamperProtectionStatus);
                 WmiGetString(o, L"AMEngineVersion", d.amEngineVersion);
                 WmiGetString(o, L"AMProductVersion", d.amProductVersion);
                 WmiGetString(o, L"AMServiceVersion", d.amServiceVersion);
@@ -136,7 +138,10 @@ DefenderInfo CollectDefenderInfo() {
             wmi.Query(L"SELECT * FROM MSFT_MpPreference", pref) == Status::Success) {
             for (auto* o : pref) {
                 unsigned long long u = 0;
-                if (WmiGetUInt(o, L"MAPSReporting", u))        d.cloudProtection = (u != 0);
+                if (WmiGetUInt(o, L"MAPSReporting", u)) {
+                    d.cloudProtection = (u != 0);
+                    d.cloudProtectionStatus = Status::Success;
+                }
                 if (WmiGetUInt(o, L"SubmitSamplesConsent", u)) d.sampleSubmission = (u == 1 || u == 3);
             }
         }

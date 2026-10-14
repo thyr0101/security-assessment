@@ -39,6 +39,11 @@ int wmain(int argc, wchar_t** argv) {
             std::wcout << L"Usage: SecurityAssessment [--json] [--no-hash]\n";
             return 0;
         }
+        else {
+            std::wcerr << L"Unknown option: " << a << L"\n"
+                       << L"Usage: SecurityAssessment [--json] [--no-hash]\n";
+            return 2;
+        }
     }
 
     // Choose the stream mode ONCE, before any I/O on stdout.

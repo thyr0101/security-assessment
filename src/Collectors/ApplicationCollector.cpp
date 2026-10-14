@@ -103,7 +103,7 @@ void Glob(const fs::path& dir, const std::vector<std::wstring>& parts, size_t i,
 // Returns every existing path that matches `pattern` (environment variables expanded).
 std::vector<std::wstring> ResolvePaths(const std::wstring& pattern, Status& status) {
     std::vector<std::wstring> found;
-    const fs::path p(ExpandEnv(pattern));
+    const fs::path p = fs::absolute(fs::path(ExpandEnv(pattern))).lexically_normal();
     std::vector<std::wstring> parts;
     for (const auto& element : p.relative_path())
         if (!element.empty()) parts.push_back(element.wstring());

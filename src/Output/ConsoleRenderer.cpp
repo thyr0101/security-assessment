@@ -228,16 +228,19 @@ void RenderConsole(const AssessmentResult& r) {
     Section(L"Protection");
     SubHeader(L"Microsoft Defender", L"", Dim());
     if (r.score.registeredAntivirusScoring) {
-        KV(L"Defender", r.defender.status == Status::Success
+        KV(L"Defender", r.defender.status == Status::Success && r.defender.enabledStatus == Status::Success
             ? (r.defender.enabled ? L"Enabled" : L"Inactive") : L"Unknown", Dim());
         if (!r.defender.amRunningMode.empty()) KV(L"Running mode", r.defender.amRunningMode);
     } else {
-        Flag(L"Defender", r.defender.enabled, r.defender.status);
-        Flag(L"Real-Time", r.defender.realTimeProtection, r.defender.status);
-        Flag(L"Behavior Monitoring", r.defender.behaviorMonitor, r.defender.status);
-        Flag(L"IOAV Protection", r.defender.ioav, r.defender.status);
-        Flag(L"Cloud Protection", r.defender.cloudProtection, r.defender.status);
-        Flag(L"Tamper Protection", r.defender.tamperProtection, r.defender.status);
+        auto defenderFlag = [&](const wchar_t* label, bool value, Status status) {
+            Flag(label, value, r.defender.status == Status::Success ? status : r.defender.status);
+        };
+        defenderFlag(L"Defender", r.defender.enabled, r.defender.enabledStatus);
+        defenderFlag(L"Real-Time", r.defender.realTimeProtection, r.defender.realTimeProtectionStatus);
+        defenderFlag(L"Behavior Monitoring", r.defender.behaviorMonitor, r.defender.behaviorMonitorStatus);
+        defenderFlag(L"IOAV Protection", r.defender.ioav, r.defender.ioavStatus);
+        defenderFlag(L"Cloud Protection", r.defender.cloudProtection, r.defender.cloudProtectionStatus);
+        defenderFlag(L"Tamper Protection", r.defender.tamperProtection, r.defender.tamperProtectionStatus);
         KV(L"Engine Version", r.defender.amEngineVersion);
         KV(L"Signatures Version", r.defender.antivirusSignatureVersion);
     }
@@ -323,10 +326,12 @@ void RenderConsole(const AssessmentResult& r) {
     // ------------------------------------------------------------ Applications
     Section(L"Applications");
     for (auto& category : r.applications) {
+        const bool complete = category.status == Status::Success || category.status == Status::NotFound;
         SubHeader(category.name,
-                  category.apps.empty() ? std::wstring(L"none found")
+                  !complete ? L"Incomplete (" + std::wstring(ToW(category.status)) + L")"
+                  : category.apps.empty() ? std::wstring(L"none found")
                                         : Num(category.apps.size()) + L" found",
-                  category.apps.empty() ? Dim() : Grn());
+                  !complete ? Yel() : category.apps.empty() ? Dim() : Grn());
         for (auto& app : category.apps) {
             out() << L"    " << Grn() << L"[+] " << Rst() << Bold() << Wht() << app.name << Rst();
             if (!app.version.empty()) out() << L"  " << Cyn() << app.version << Rst();

@@ -106,8 +106,10 @@ namespace sa {
         return Status::Success;
     }
 
-    static bool ParseUInt(const wchar_t* text, unsigned long long& out) {
+    static bool ParseUInt(BSTR text, unsigned long long& out) {
         if (!text) return false;
+        // BSTRs are length-delimited; reject embedded nulls before parsing.
+        if (wcslen(text) != ::SysStringLen(text)) return false;
         while (iswspace(*text)) ++text;
         if (!*text || *text == L'-') return false;
         wchar_t* end = nullptr;
@@ -128,24 +130,30 @@ namespace sa {
             out.assign(v.bstrVal, ::SysStringLen(v.bstrVal));
             ok = true;
         }
-        else if (v.vt == VT_NULL || v.vt == VT_EMPTY) {
-            out.clear(); ok = true;
-        }
         return ok;
     }
 
-    static bool VariantUInt(const VARIANT& v, unsigned long long& out) {
+    static bool VariantUInt(const VARIANT& v, CIMTYPE type, unsigned long long& out) {
         bool ok = false;
         switch (v.vt) {
         // Read the member that matches the VARIANT type; reading ulVal for a
         // 1- or 2-byte type picks up unrelated bytes of the union.
-        case VT_I1:  out = static_cast<unsigned char>(v.cVal);       ok = true; break;
+        case VT_I1:
+            if (v.cVal < 0 && type != CIM_UINT8) return false;
+            out = static_cast<unsigned char>(v.cVal); ok = true; break;
         case VT_UI1: out = v.bVal;                                   ok = true; break;
-        case VT_I2:  out = static_cast<unsigned short>(v.iVal);      ok = true; break;
+        case VT_I2:
+            if (v.iVal < 0 && type != CIM_UINT16) return false;
+            out = static_cast<unsigned short>(v.iVal); ok = true; break;
         case VT_UI2: out = v.uiVal;                                  ok = true; break;
-        case VT_I4:  out = static_cast<ULONG>(v.lVal);               ok = true; break;
+        case VT_I4:
+            // WMI also represents uint32 as VT_I4; preserve its high bit.
+            if (v.lVal < 0 && type != CIM_UINT32) return false;
+            out = static_cast<ULONG>(v.lVal); ok = true; break;
         case VT_UI4: out = v.ulVal;                                  ok = true; break;
-        case VT_I8:  out = static_cast<unsigned long long>(v.llVal); ok = true; break;
+        case VT_I8:
+            if (v.llVal < 0 && type != CIM_UINT64) return false;
+            out = static_cast<unsigned long long>(v.llVal); ok = true; break;
         case VT_UI8: out = v.ullVal;                                 ok = true; break;
         case VT_BSTR:
             ok = ParseUInt(v.bstrVal, out);
@@ -157,14 +165,16 @@ namespace sa {
 
     bool WmiGetUInt(IWbemClassObject* o, const wchar_t* name, unsigned long long& out) {
         _variant_t v;
-        return SUCCEEDED(o->Get(name, 0, &v, nullptr, nullptr)) && VariantUInt(v, out);
+        CIMTYPE type = 0;
+        return SUCCEEDED(o->Get(name, 0, &v, &type, nullptr)) && VariantUInt(v, type, out);
     }
 
     bool WmiGetUIntArray(IWbemClassObject* o, const wchar_t* name,
                          std::vector<unsigned long long>& out) {
         out.clear();
         _variant_t v;
-        if (FAILED(o->Get(name, 0, &v, nullptr, nullptr))) return false;
+        CIMTYPE type = 0;
+        if (FAILED(o->Get(name, 0, &v, &type, nullptr))) return false;
         bool ok = false;
         if ((v.vt & VT_ARRAY) && !(v.vt & VT_BYREF) && v.parray && ::SafeArrayGetDim(v.parray) == 1) {
             SAFEARRAY* arr = v.parray;
@@ -185,7 +195,7 @@ namespace sa {
                     // All supported scalar members share the VARIANT union's address.
                     if (FAILED(::SafeArrayGetElement(arr, &i, &item.bVal))) return false;
                     unsigned long long value = 0;
-                    if (!VariantUInt(item, value)) return false;
+                    if (!VariantUInt(item, type & ~CIM_FLAG_ARRAY, value)) return false;
                     values.push_back(value);
                 }
                 out = std::move(values);

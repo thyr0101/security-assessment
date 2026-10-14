@@ -147,6 +147,13 @@ struct DefenderInfo {
     bool tamperProtection = false;
     bool antispywareEnabled = false;
     bool antivirusEnabled = false;
+    // Individual property reads can fail while the status query itself succeeds.
+    Status enabledStatus = Status::Unavailable;
+    Status realTimeProtectionStatus = Status::Unavailable;
+    Status behaviorMonitorStatus = Status::Unavailable;
+    Status ioavStatus = Status::Unavailable;
+    Status cloudProtectionStatus = Status::Unavailable;
+    Status tamperProtectionStatus = Status::Unavailable;
     std::wstring amEngineVersion;
     std::wstring amProductVersion;
     std::wstring amServiceVersion;

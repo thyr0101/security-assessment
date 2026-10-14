@@ -74,9 +74,18 @@ namespace sa {
         default:                           o.architecture = L"Unknown";
         }
 
-        wchar_t buf[MAX_PATH]{};
-        if (UINT n = ::GetWindowsDirectoryW(buf, MAX_PATH)) o.systemRoot.assign(buf, n);
-        if (UINT n = ::GetSystemDirectoryW(buf, MAX_PATH))  o.systemDirectory.assign(buf, n);
+        auto directory = [](auto query) {
+            std::vector<wchar_t> buffer(MAX_PATH);
+            for (unsigned attempt = 0; attempt < 4; ++attempt) {
+                const UINT n = query(buffer.data(), static_cast<UINT>(buffer.size()));
+                if (!n) return std::wstring{};
+                if (n < buffer.size()) return std::wstring(buffer.data(), n);
+                buffer.resize(static_cast<size_t>(n) + 1);
+            }
+            return std::wstring{};
+        };
+        o.systemRoot = directory(::GetWindowsDirectoryW);
+        o.systemDirectory = directory(::GetSystemDirectoryW);
 
         DWORD cch = MAX_COMPUTERNAME_LENGTH + 1;
         wchar_t cname[MAX_COMPUTERNAME_LENGTH + 1]{};

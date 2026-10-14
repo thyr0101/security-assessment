@@ -18,10 +18,15 @@ std::vector<PrivacyFinding> CollectPrivacyFindings() {
     std::vector<PrivacyFinding> out;
 
     // Telemetry (AllowTelemetry) — 0=Security,1=Basic,2=Enhanced,3=Full
-    if (auto v = RegReadDword(HKEY_LOCAL_MACHINE,
-        L"SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection", L"AllowTelemetry")) {
+    RegistryReader telemetry;
+    Status telemetryStatus = telemetry.Open(HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection");
+    DWORD telemetryLevel = 0;
+    if (telemetryStatus == Status::Success)
+        telemetryStatus = telemetry.GetDword(L"AllowTelemetry", telemetryLevel);
+    if (telemetryStatus == Status::Success) {
         const wchar_t* s = L"Unknown";
-        switch (*v) {
+        switch (telemetryLevel) {
         case 0: s = L"Security (minimum)"; break;
         case 1: s = L"Basic"; break;
         case 2: s = L"Enhanced"; break;
@@ -29,9 +34,12 @@ std::vector<PrivacyFinding> CollectPrivacyFindings() {
         }
         out.push_back(Info(L"Diagnostic data level", s,
             L"Windows diagnostic data transmitted to Microsoft.", Category::Privacy));
-    } else {
+    } else if (telemetryStatus == Status::NotFound) {
         out.push_back(Info(L"Diagnostic data level", L"Default (not policy-configured)",
             L"No explicit telemetry policy override is set.", Category::Privacy));
+    } else {
+        out.push_back(Info(L"Diagnostic data level", L"Unknown (" + std::wstring(ToW(telemetryStatus)) + L")",
+            L"The telemetry policy could not be read.", Category::Privacy));
     }
 
     // Advertising ID

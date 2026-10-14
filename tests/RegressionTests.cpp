@@ -1,8 +1,11 @@
 #include "Utilities.h"
 #include "RegistryReader.h"
 #include "Collectors/ApplicationCollector.h"
+#include "Collectors/AntivirusCollector.h"
+#include "Collectors/DefenderCollector.h"
 #include "Collectors/PersistenceCollector.h"
 #include "Output/JsonRenderer.h"
+#include "Output/ConsoleRenderer.h"
 #include "Security/ScoreEngine.h"
 #include "WmiHelper.h"
 #include <comdef.h>
@@ -186,12 +189,75 @@ static void TestComAndWmi() {
           "failed WMI query must not return success");
 }
 
+static void TestRegisteredAntivirus() {
+    AssessmentResult result;
+    result.antivirus.status = Status::Success;
+    AntivirusProduct first;
+    first.name = L"Example \"Antivirus\" A"; first.id = L"first";
+    first.state = AntivirusState::Enabled; first.status = Status::Success;
+    first.signaturesUpToDate = Tri::No; // Enabled status alone determines credit.
+    AntivirusProduct second = first;
+    second.name = L"Example Antivirus B"; second.id = L"second"; second.state = AntivirusState::Disabled;
+    AntivirusProduct defender = second;
+    defender.name = L"Microsoft Defender Antivirus"; defender.id = L"defender"; defender.isDefender = true;
+    result.antivirus.products = {first, second, defender};
+    result.defender.periodicScanning = Tri::Yes;
+    result.defender.amRunningMode = L"SxS Passive Mode";
+    result.score = ComputeScore(result);
+    Check(result.score.registeredAntivirusScoring, "third-party AV selects registration scoring");
+    Check(result.score.total == 200 && result.score.maximum == 1000, "enabled third-party AV earns malware section only");
+    Check(result.score.antivirusScores.size() == 3 && result.score.antivirusScores[0].awardedPoints == 200 &&
+          result.score.antivirusScores[1].awardedPoints == 0 && result.score.antivirusScores[2].awardedPoints == 0,
+          "independent product scores when Defender is inactive");
+    Check(Rule(result.score, "mp.registered").awardedPoints == 200, "Defender WMI failure must not erase WSC credit");
+    std::ofstream("antivirus-output.json", std::ios::binary) << RenderJson(result);
+    std::wostringstream captured;
+    auto* old = std::wcout.rdbuf(captured.rdbuf());
+    try { RenderConsole(result); } catch (...) { std::wcout.rdbuf(old); throw; }
+    std::wcout.rdbuf(old);
+    Check(captured.str().find(first.name) != std::wstring::npos && captured.str().find(second.name) != std::wstring::npos,
+          "console names both third-party products");
+    Check(captured.str().find(L"200 / 200") != std::wstring::npos && captured.str().find(L"0 / 200") != std::wstring::npos,
+          "console shows each antivirus score");
+    Check(captured.str().find(L"Periodic scanning") != std::wstring::npos && captured.str().find(L"Real-Time") == std::wstring::npos,
+          "fallback replaces inactive Defender detail and shows periodic scanning");
+    for (Tri periodic : {Tri::No, Tri::Yes, Tri::Unknown}) {
+        result.defender.periodicScanning = periodic;
+        Check(ComputeScore(result).total == 200, "periodic scanning must never affect score");
+    }
+    result.antivirus.products[1].state = AntivirusState::Enabled;
+    auto both = ComputeScore(result);
+    Check(both.total == 200 && both.antivirusScores[0].awardedPoints == 200 && both.antivirusScores[1].awardedPoints == 200,
+          "two enabled AVs score separately without inflating total");
+    result.antivirus.products[1].state = AntivirusState::Disabled;
+    for (auto state : {AntivirusState::Disabled, AntivirusState::Snoozed, AntivirusState::Expired, AntivirusState::Unknown}) {
+        result.antivirus.products[0].state = state;
+        Check(ComputeScore(result).total == 0, "inactive or unknown antivirus earns zero");
+    }
+    result.antivirus.products[0].state = AntivirusState::Enabled;
+    result.antivirus.products[0].status = Status::AccessDenied;
+    Check(ComputeScore(result).total == 0, "unreadable enabled field cannot earn points");
+    result.antivirus.products = {defender};
+    result.antivirus.products[0].state = AntivirusState::Enabled;
+    Check(ComputeScore(result).total == 200, "registered Defender fallback works when its WMI provider is unavailable");
+    result.defender.status = Status::Success; result.defender.enabled = result.defender.installed = true;
+    auto defenderOnly = ComputeScore(result);
+    Check(!defenderOnly.registeredAntivirusScoring && Rule(defenderOnly, "mp.defender").awardedPoints == 40,
+          "normal Defender-only scoring is preserved");
+    Check(PeriodicScanningFromMode(L"SxS Passive Mode") == Tri::Yes, "SxS periodic scanning enabled");
+    Check(PeriodicScanningFromMode(L" normal ") == Tri::No && PeriodicScanningFromMode(L"Passive Mode") == Tri::No &&
+          PeriodicScanningFromMode(L"EDR Block Mode") == Tri::No, "other documented modes are not limited periodic scanning");
+    Check(PeriodicScanningFromMode(L"") == Tri::Unknown && PeriodicScanningFromMode(L"future mode") == Tri::Unknown,
+          "unrecognized periodic scanning state remains unknown");
+}
+
 int main() {
     try {
         Fixture fixture;
         TestRegistry(fixture);
         TestFiles(fixture);
         TestScoreAndJson();
+        TestRegisteredAntivirus();
         TestComAndWmi();
         std::cout << "All native regressions passed.\n";
         return 0;

@@ -22,12 +22,18 @@ Reviewed all source/header files, both build definitions, and the README. The ap
 
 ## Compatibility
 
+### Registered antivirus support
+
+Added native Windows Security Center product enumeration, independent 200-point product scores, and a capped 200-point malware category fallback. Defender-only detailed scoring remains available. Defender periodic scanning is informational and uses its reported running mode; missing evidence stays unknown. Both console and JSON expose the results. Synthetic coverage includes multiple enabled/disabled products, inaccessible states, Defender provider failure, and periodic-scanning score independence.
+
 - Existing CLI options, report sections, and JSON keys remain. New JSON status/context fields are additive.
-- Corrected readings and rules can change scores. Full credit remains 1000; existing rule IDs and weights remain.
+- Corrected readings and rules can change scores. Full credit remains 1000. Registration fallback replaces the granular malware rules with `mp.registered` (200 points); other rule IDs and weights remain.
 - Application definitions and threshold definitions remain configured in C++.
 - The tool still reports a security posture, not malware detection or proof of security. Boolean model fields may need their accompanying status/context to distinguish unavailable data.
 
 ## Validation
+
+For the registered-antivirus update, CMake Release, native MSBuild Debug, and MSBuild Release with `/analyze` compiled successfully with no reported analyzer warnings. After fixing the malformed multi-string reader to require the double-null terminator, all native regressions passed, including the antivirus scenarios. The smoke harness also passed live JSON, hashing, help, and redirected-console checks without elevation. Multiple-product behavior passed synthetic fixtures but has not been confirmed on a machine running multiple registered antivirus products.
 
 - Native MSBuild Release and Debug builds; Debug uses the installed v145 toolset override because the project defaults to v143.
 - CMake-generated Release application and native regression targets.
@@ -40,5 +46,7 @@ One local run observed 10.283 seconds for the updated `--json --no-hash` and 18.
 ## API references
 
 - [COM initialization and balancing cleanup](https://learn.microsoft.com/en-us/windows/win32/api/objbase/nf-objbase-coinitialize)
+- [Windows Security Center product states](https://learn.microsoft.com/en-us/windows/win32/api/iwscapi/ne-iwscapi-wsc_security_product_state)
+- [Defender running modes](https://learn.microsoft.com/en-us/defender-endpoint/microsoft-defender-antivirus-windows#check-the-state-of-microsoft-defender-antivirus-on-your-device)
 - [Smart App Control evaluation and enforcement](https://learn.microsoft.com/en-us/windows/apps/develop/smart-app-control/overview)
 - [Native processor power information structure omitted from SDK headers](https://learn.microsoft.com/en-us/windows/win32/power/processor-power-information-str)

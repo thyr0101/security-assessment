@@ -140,10 +140,27 @@ std::string RenderJson(const AssessmentResult& r) {
       << "\"threatsCount\":" << r.defender.threatsCount << ","
       << "\"tamperProtection\":" << B(r.defender.tamperProtection) << ","
       << "\"amEngineVersion\":" << Q(r.defender.amEngineVersion) << ","
+      << "\"amRunningMode\":" << Q(r.defender.amRunningMode) << ","
+      << "\"periodicScanning\":" << TriS(r.defender.periodicScanning) << ","
       << "\"antivirusSignatureVersion\":" << Q(r.defender.antivirusSignatureVersion) << ","
       << "\"status\":" << StatusS(r.defender.status)
       << ",\"reason\":" << Q(r.defender.reason)
       << "},";
+
+    o << "\"antivirus\":{\"status\":" << StatusS(r.antivirus.status)
+      << ",\"reason\":" << Q(r.antivirus.reason)
+      << ",\"hasThirdParty\":" << B(HasThirdPartyAntivirus(r.antivirus))
+      << ",\"products\":[";
+    for (size_t i = 0; i < r.antivirus.products.size(); ++i) {
+        if (i) o << ",";
+        const auto& av = r.antivirus.products[i];
+        o << "{\"name\":" << Q(av.name) << ",\"id\":" << Q(av.id)
+          << ",\"state\":" << Q(std::wstring(ToW(av.state)))
+          << ",\"status\":" << StatusS(av.status)
+          << ",\"isDefender\":" << B(av.isDefender)
+          << ",\"signaturesUpToDate\":" << TriS(av.signaturesUpToDate) << "}";
+    }
+    o << "]},";
 
     // firewall
     o << "\"firewall\":{"
@@ -316,6 +333,7 @@ std::string RenderJson(const AssessmentResult& r) {
     o << "\"score\":{"
       << "\"total\":" << r.score.total << ","
       << "\"maximum\":" << r.score.maximum << ","
+      << "\"registeredAntivirusScoring\":" << B(r.score.registeredAntivirusScoring) << ","
       << "\"rules\":[";
     for (size_t i = 0; i < r.score.rules.size(); ++i) {
         auto& s = r.score.rules[i];
@@ -328,6 +346,14 @@ std::string RenderJson(const AssessmentResult& r) {
           << ",\"state\":" << Q(s.state)
           << ",\"reason\":" << Q(s.reason)
           << "}";
+    }
+    o << "],\"antivirusScores\":[";
+    for (size_t i = 0; i < r.score.antivirusScores.size(); ++i) {
+        if (i) o << ",";
+        const auto& score = r.score.antivirusScores[i];
+        o << "{\"id\":" << Q(score.id) << ",\"name\":" << Q(score.description)
+          << ",\"state\":" << Q(score.state) << ",\"maxPoints\":" << score.maxPoints
+          << ",\"awardedPoints\":" << score.awardedPoints << ",\"reason\":" << Q(score.reason) << "}";
     }
     o << "]}}";
     return o.str();

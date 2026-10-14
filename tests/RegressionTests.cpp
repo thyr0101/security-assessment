@@ -108,6 +108,21 @@ static const ScoreRuleResult& Rule(const ScoreReport& score, const std::string& 
     throw std::runtime_error("missing score rule");
 }
 
+static WindowsUpdateInfo HealthyWindowsUpdate() {
+    WindowsUpdateInfo update;
+    update.status = update.pendingStatus = update.historyStatus = update.services.status = Status::Success;
+    update.rebootRequired = Tri::No;
+    update.lastInstallationSucceeded = Tri::Yes;
+    update.lastInstallationResult = L"Succeeded";
+    update.lastSearchUtc = L"2026-10-14T10:00:00Z";
+    for (const auto* name : {L"wuauserv", L"BITS", L"UsoSvc"}) {
+        ServiceEntry service;
+        service.name = name; service.state = L"Stopped"; service.startType = L"Manual"; service.status = Status::Success;
+        update.services.entries.push_back(service);
+    }
+    return update;
+}
+
 static void TestScoreAndJson() {
     AssessmentResult result;
     auto empty = ComputeScore(result);
@@ -115,6 +130,7 @@ static void TestScoreAndJson() {
     Check(Rule(empty, "mp.rtp").category == "Malware Protection", "failed rules keep their category");
     result.os.status = result.cpu.status = Status::Success;
     result.os.build = 26100; result.os.ubr = 1;
+    result.windowsUpdate = HealthyWindowsUpdate();
     result.cpu.vmx = result.cpu.aesni = result.cpu.nx = true;
     auto& s = result.security;
     s.tpm.status = Status::Success; s.tpm.present = s.tpm.ready = true; s.tpm.specVersion = L"2.0";
@@ -192,6 +208,75 @@ static void TestScoreAndJson() {
     Check(json.find("tabs\\tand\\nnewlines") != std::string::npos, "control characters are JSON escaped");
     // The smoke harness independently parses this output using Python's JSON parser.
     std::ofstream("regression-output.json", std::ios::binary) << json;
+}
+
+static void TestWindowsUpdate() {
+    AssessmentResult result;
+    result.os.status = Status::Success; result.os.build = 26100; result.os.ubr = 1;
+    result.windowsUpdate = HealthyWindowsUpdate();
+    auto score = ComputeScore(result);
+    Check(score.maximum == 1000, "Windows Update category preserves the 1000-point maximum");
+    Check(Rule(score, "os.patch").category == "Windows Update" && Rule(score, "os.patch").maxPoints == 30,
+          "update details move category while retaining their ID and 30-point weight");
+    int categoryMax = 0, categoryAward = 0;
+    for (const auto& rule : score.rules) if (rule.category == "Windows Update") {
+        categoryMax += rule.maxPoints; categoryAward += rule.awardedPoints;
+    }
+    Check(categoryMax == 100 && categoryAward == 100, "healthy Windows Update receives all 100 points");
+    int previous = 41;
+    for (unsigned count : {0u, 1u, 2u, 3u, 7u, 8u, 9u, UINT_MAX}) {
+        result.windowsUpdate.pendingCount = count;
+        const auto rule = Rule(ComputeScore(result), "wu.pending");
+        Check(rule.awardedPoints == 40 - 5 * static_cast<int>((std::min)(count, 8u)) &&
+              rule.awardedPoints <= previous && rule.awardedPoints >= 0, "pending update penalty is monotonic and bounded");
+        previous = rule.awardedPoints;
+    }
+    result.windowsUpdate.pendingCount = 1;
+    result.windowsUpdate.optionalCount = 12;
+    Check(Rule(ComputeScore(result), "wu.pending").awardedPoints == 35, "one pending update earns 35/40; optional updates do not reduce score");
+    result.windowsUpdate.pendingStatus = Status::AccessDenied;
+    Check(Rule(ComputeScore(result), "wu.pending").state == "Unknown" &&
+          Rule(ComputeScore(result), "wu.pending").awardedPoints == 0, "failed pending search does not masquerade as no updates");
+    result.windowsUpdate.pendingStatus = Status::Success;
+    auto& service = result.windowsUpdate.services.entries[0];
+    Check(Rule(ComputeScore(result), "wu.service.wuauserv").awardedPoints == 5, "idle manual update service is available on demand");
+    service.startType = L"Disabled";
+    Check(Rule(ComputeScore(result), "wu.service.wuauserv").awardedPoints == 0, "disabled update service earns no readiness credit");
+    service.startType = L"Manual"; service.status = Status::AccessDenied;
+    Check(Rule(ComputeScore(result), "wu.service.wuauserv").state == "Unknown", "unreadable service is unknown");
+    service.status = Status::Success;
+    result.windowsUpdate.rebootRequired = Tri::Yes;
+    Check(Rule(ComputeScore(result), "wu.restart").awardedPoints == 0 &&
+          Rule(ComputeScore(result), "wu.restart").state == "Restart required", "pending restart reduces update completion score");
+    result.windowsUpdate.rebootRequired = Tri::Unknown;
+    Check(Rule(ComputeScore(result), "wu.restart").state == "Unknown", "unavailable restart status is unknown");
+    result.windowsUpdate.rebootRequired = Tri::No;
+    result.windowsUpdate.lastInstallationSucceeded = Tri::No;
+    Check(Rule(ComputeScore(result), "wu.history").awardedPoints == 0, "failed latest update installation earns no history credit");
+    result.windowsUpdate.lastInstallationSucceeded = Tri::Yes; result.windowsUpdate.historyStatus = Status::AccessDenied;
+    Check(Rule(ComputeScore(result), "wu.history").state == "Unknown", "unreadable history cannot earn stale credit");
+    result.windowsUpdate = HealthyWindowsUpdate();
+    result.windowsUpdate.pendingCount = 1;
+    WindowsUpdateItem item;
+    item.title = L"Pending \"Windows\" update"; item.id = L"update-id"; item.kbArticles = {L"1234567"};
+    item.optional = Tri::No; item.downloaded = Tri::Yes;
+    result.windowsUpdate.updates.push_back(item);
+    result.score = ComputeScore(result);
+    std::ofstream("windows-update-output.json", std::ios::binary) << RenderJson(result);
+    std::wostringstream captured;
+    auto* old = std::wcout.rdbuf(captured.rdbuf());
+    try { RenderConsole(result); } catch (...) { std::wcout.rdbuf(old); throw; }
+    std::wcout.rdbuf(old);
+    Check(captured.str().find(item.title) != std::wstring::npos && captured.str().find(L"KB1234567") != std::wstring::npos,
+          "pending update title and KB are shown in console output");
+    const size_t scoreStart = captured.str().find(L"Rule breakdown");
+    const size_t updateGroup = captured.str().find(L"Windows Update", scoreStart);
+    const size_t metadata = captured.str().find(L"Windows update details available", scoreStart);
+    Check(scoreStart != std::wstring::npos && updateGroup != std::wstring::npos && metadata > updateGroup,
+          "update details appear under Windows Update despite retaining the os.patch ID");
+    result.windowsUpdate.pendingStatus = Status::Unavailable;
+    result.score = ComputeScore(result);
+    std::ofstream("windows-update-unknown.json", std::ios::binary) << RenderJson(result);
 }
 
 static void TestComAndWmi() {
@@ -367,6 +452,7 @@ int main() {
         TestFiles(fixture);
         TestScoreAndJson();
         TestRegisteredAntivirus();
+        TestWindowsUpdate();
         TestPartialCollection();
         TestComAndWmi();
         std::cout << "All native regressions passed.\n";

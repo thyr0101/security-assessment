@@ -153,16 +153,8 @@ private:
     bool changed_ = false;
 };
 
-const wchar_t* GroupName(const std::string& id) {
-    const std::string p = id.substr(0, id.find('.'));
-    if (p == "hw")  return L"Hardware Security";
-    if (p == "os")  return L"Operating System";
-    if (p == "mp")  return L"Malware Protection";
-    if (p == "net") return L"Network Security";
-    if (p == "enc") return L"Encryption";
-    if (p == "acc") return L"Account Security";
-    if (p == "hyg") return L"Software Hygiene";
-    return L"Other";
+std::wstring GroupName(const std::string& category) {
+    return category == "OS Security" ? L"Operating System" : Utf8ToWide(category);
 }
 
 const wchar_t* OutcomeColor(int awarded, int max) {
@@ -278,6 +270,42 @@ void RenderConsole(const AssessmentResult& r) {
     SubHeader(L"Windows Firewall", L"", Dim());
     for (auto& p : r.firewall.profiles)
         Flag((p.name).c_str(), p.enabled, p.status);
+
+    // ------------------------------------------------------------ Windows Update
+    Section(L"Windows Update");
+    const auto& update = r.windowsUpdate;
+    const bool pendingKnown = update.pendingStatus == Status::Success;
+    KV(L"Pending updates", pendingKnown ? Num(update.pendingCount) : L"Unknown", pendingKnown ? Wht() : Yel());
+    KV(L"Optional updates", pendingKnown ? Num(update.optionalCount) : L"Unknown");
+    KV(L"Update source", L"Windows' local update cache", Dim());
+    KV(L"Last search (UTC)", update.lastSearchUtc.empty() ? L"Unknown" : update.lastSearchUtc);
+    KV(L"Restart required", ToW(update.rebootRequired), update.rebootRequired == Tri::Yes ? Yel() : Wht());
+    for (const auto& item : update.updates) {
+        SubHeader(item.title, item.optional == Tri::Yes ? L"Optional" : item.optional == Tri::No ? L"Pending" : L"Type unknown", Yel());
+        if (!item.kbArticles.empty()) {
+            std::wstring articles;
+            for (const auto& kb : item.kbArticles) {
+                if (!articles.empty()) articles += L", ";
+                articles += L"KB" + kb;
+            }
+            KV(L"Update reference", articles);
+        }
+        KV(L"Downloaded", ToW(item.downloaded));
+    }
+    if (!update.pendingReason.empty()) KV(L"Update query", update.pendingReason, Yel());
+    KV(L"Latest installation", update.lastInstallationResult.empty() ? L"Unknown" : update.lastInstallationResult,
+        update.lastInstallationSucceeded == Tri::No ? Red() : Wht());
+    if (!update.lastInstallationTitle.empty()) KV(L"Update name", update.lastInstallationTitle);
+    if (!update.lastInstallationUtc.empty()) KV(L"Installation (UTC)", update.lastInstallationUtc);
+    if (!update.lastInstallationError.empty()) KV(L"Installation error", update.lastInstallationError, Yel());
+    SubHeader(L"Update services", L"", Dim());
+    for (const auto& service : update.services.entries) {
+        const std::wstring label = service.displayName.empty() ? service.name : service.displayName;
+        KV(label.c_str(), service.status == Status::Success
+            ? service.state + L" (" + service.startType + L")"
+            : L"Unknown (" + std::wstring(ToW(service.status)) + L")",
+            service.status != Status::Success ? Yel() : service.startType == L"Disabled" ? Red() : Wht());
+    }
 
     // ------------------------------------------------------------ Storage
     Section(L"Storage");
@@ -403,31 +431,31 @@ void RenderConsole(const AssessmentResult& r) {
 
     out() << L"\n  " << Dim() << L"Rule breakdown (awarded / max)" << Rst() << L"\n";
 
-    // Rules arrive grouped by id prefix; keep their order and add a sub-heading per group.
-    std::vector<std::string> prefixes;
+    // Group by category so a rule can move without changing its stable ID.
+    std::vector<std::string> categories;
     size_t descriptionWidth = 36;
     for (auto& rl : r.score.rules) {
         if (rl.maxPoints == 0) continue;               // informational-only entries
         descriptionWidth = (std::max)(descriptionWidth, Utf8ToWide(rl.description).size() + 2);
-        const std::string p = rl.id.substr(0, rl.id.find('.'));
+        const std::string& p = rl.category;
         bool seen = false;
-        for (auto& q : prefixes) if (q == p) { seen = true; break; }
-        if (!seen) prefixes.push_back(p);
+        for (auto& q : categories) if (q == p) { seen = true; break; }
+        if (!seen) categories.push_back(p);
     }
-    for (auto& prefix : prefixes) {
+    for (auto& category : categories) {
         int gAwarded = 0, gMax = 0;
         for (auto& rl : r.score.rules) {
             if (rl.maxPoints == 0) continue;
-            if (rl.id.substr(0, rl.id.find('.')) != prefix) continue;
+            if (rl.category != category) continue;
             gAwarded += rl.awardedPoints;
             gMax += rl.maxPoints;
         }
-        SubHeader(GroupName(prefix + "."),
+        SubHeader(GroupName(category),
                   PadLeft(Num(gAwarded), 3) + L" / " + PadLeft(Num(gMax), 3),
                   OutcomeColor(gAwarded, gMax));
         for (auto& rl : r.score.rules) {
             if (rl.maxPoints == 0) continue;
-            if (rl.id.substr(0, rl.id.find('.')) != prefix) continue;
+            if (rl.category != category) continue;
             const wchar_t* c = OutcomeColor(rl.awardedPoints, rl.maxPoints);
             out() << L"    " << c << PadLeft(Num(rl.awardedPoints), 3) << Rst() << Dim() << L" / " << Rst()
                   << Lbl() << PadLeft(Num(rl.maxPoints), 3) << Rst() << L"   "

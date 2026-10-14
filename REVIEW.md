@@ -22,6 +22,16 @@ Reviewed all source/header files, both build definitions, and the README. The ap
 
 ## Compatibility
 
+### Windows Update category
+
+Added a native, offline Windows Update Agent collector and a 100-point Windows Update category. The existing 30-point `os.patch` rule moves category without changing ID. New checks cover a 40-point pending-update budget (5 points deducted per non-optional pending update), three service-readiness checks totaling 15 points, restart completion (10), and the latest installation result (5). Seven update services are displayed, and stopped services configured to start on demand are not treated as disabled.
+
+The extra 70 points come from TPM key-protection availability (75 to 25) and assessment administrator access (25 to 5); maximum remains 1000 in both Defender and registered-antivirus modes. Console grouping now uses the category field. JSON adds update details, separate optional counts, history, service states, and explicit null counts on failed reads. Offline search has a 45-second completion timeout, and cached timestamps are displayed.
+
+Live collection without elevation found one downloaded pending update, Windows Malicious Software Removal Tool x64 KB890830, and awarded 35/40 for pending updates and 95/100 for Windows Update. Native regressions cover backlog counts through overflow boundaries, unknown reads, disabled and idle services, restart states, installation errors, output escaping, category placement, and the 1000-point scale.
+
+API references: [offline search setting](https://learn.microsoft.com/en-us/windows/win32/api/wuapi/nf-wuapi-iupdatesearcher-put_online), [update search criteria](https://learn.microsoft.com/en-us/windows/win32/api/wuapi/nf-wuapi-iupdatesearcher-search), and [asynchronous search guidance](https://learn.microsoft.com/en-us/windows/win32/wua_sdk/guidelines-for-asynchronous-wua-operations).
+
 ### Follow-up bug review
 
 - Defender fields now retain individual read statuses. Missing real-time, behavior, IOAV, cloud, and tamper properties are reported as unknown and cannot earn points from stale values. A running service alone does not establish active antivirus protection.

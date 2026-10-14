@@ -18,7 +18,7 @@ enum class Tri { Unknown, Yes, No, NotApplicable };
 enum class Severity { Informational, Low, Medium, High, Critical };
 
 enum class Category {
-    HardwareSecurity, OsSecurity, MalwareProtection, NetworkSecurity,
+    HardwareSecurity, OsSecurity, WindowsUpdate, MalwareProtection, NetworkSecurity,
     Encryption, AccountSecurity, Privacy, Hardening, SoftwareHygiene, Informational
 };
 
@@ -56,6 +56,7 @@ inline const wchar_t* ToW(Category c) {
     switch (c) {
     case Category::HardwareSecurity:  return L"Hardware Security";
     case Category::OsSecurity:        return L"OS Security";
+    case Category::WindowsUpdate:     return L"Windows Update";
     case Category::MalwareProtection: return L"Malware Protection";
     case Category::NetworkSecurity:   return L"Network Security";
     case Category::Encryption:        return L"Encryption";

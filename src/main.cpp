@@ -16,6 +16,7 @@
 #include "Collectors/ApplicationCollector.h"
 #include "Collectors/PrivacyCollector.h"
 #include "Collectors/PersistenceCollector.h"
+#include "Collectors/WindowsUpdateCollector.h"
 #include "Security/ScoreEngine.h"
 #include "Output/ConsoleRenderer.h"
 #include "Output/JsonRenderer.h"
@@ -80,6 +81,9 @@ int wmain(int argc, wchar_t** argv) {
     catch (...) { r.network.status = Status::Error; }
     try { r.services = CollectSecurityServices(); }
     catch (...) { r.services.status = Status::Error; }
+    try { r.windowsUpdate = CollectWindowsUpdateInfo(); }
+    catch (...) { r.windowsUpdate.status = r.windowsUpdate.pendingStatus = Status::Error;
+                  r.windowsUpdate.pendingReason = L"Windows Update collection failed."; }
 
     try {
         r.applications = CollectApplications(DefaultApplicationList(), !noHash);

@@ -56,6 +56,41 @@ std::string RenderJson(const AssessmentResult& r) {
       << ",\"status\":" << StatusS(r.os.status)
       << "},";
 
+    // Windows Update: null counts mean unavailable, not zero pending updates.
+    const auto& update = r.windowsUpdate;
+    o << "\"windowsUpdate\":{\"status\":" << StatusS(update.status)
+      << ",\"cachedOnly\":true,\"pendingStatus\":" << StatusS(update.pendingStatus)
+      << ",\"pendingReason\":" << Q(update.pendingReason)
+      << ",\"pendingCount\":" << (update.pendingStatus == Status::Success ? std::to_string(update.pendingCount) : "null")
+      << ",\"optionalCount\":" << (update.pendingStatus == Status::Success ? std::to_string(update.optionalCount) : "null")
+      << ",\"lastSearchUtc\":" << Q(update.lastSearchUtc)
+      << ",\"rebootRequired\":" << TriS(update.rebootRequired)
+      << ",\"historyStatus\":" << StatusS(update.historyStatus)
+      << ",\"lastInstallationUtc\":" << Q(update.lastInstallationUtc)
+      << ",\"lastInstallationTitle\":" << Q(update.lastInstallationTitle)
+      << ",\"lastInstallationResult\":" << Q(update.lastInstallationResult)
+      << ",\"lastInstallationError\":" << Q(update.lastInstallationError)
+      << ",\"lastInstallationSucceeded\":" << TriS(update.lastInstallationSucceeded)
+      << ",\"updates\":[";
+    for (size_t i = 0; i < update.updates.size(); ++i) {
+        if (i) o << ",";
+        const auto& item = update.updates[i];
+        o << "{\"title\":" << Q(item.title) << ",\"id\":" << Q(item.id)
+          << ",\"optional\":" << TriS(item.optional) << ",\"downloaded\":" << TriS(item.downloaded)
+          << ",\"kbArticles\":[";
+        for (size_t j = 0; j < item.kbArticles.size(); ++j) { if (j) o << ","; o << Q(item.kbArticles[j]); }
+        o << "]}";
+    }
+    o << "],\"servicesStatus\":" << StatusS(update.services.status) << ",\"services\":[";
+    for (size_t i = 0; i < update.services.entries.size(); ++i) {
+        if (i) o << ",";
+        const auto& service = update.services.entries[i];
+        o << "{\"name\":" << Q(service.name) << ",\"displayName\":" << Q(service.displayName)
+          << ",\"state\":" << Q(service.state) << ",\"startType\":" << Q(service.startType)
+          << ",\"status\":" << StatusS(service.status) << "}";
+    }
+    o << "]},";
+
     // hardware
     o << "\"hardware\":{"
       << "\"cpu\":{"

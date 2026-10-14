@@ -106,7 +106,7 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
         rep.rules.push_back(Zero({ "hw.hvci", "Memory integrity (HVCI)", 40, Category::HardwareSecurity }, "Disabled",
                                  "HVCI is not enabled."));
 
-    // ---- OS Security (max 175) ----
+    // ---- OS Security (max 145) ----
     rep.rules.push_back(O.build >= 22000
         ? Full({ "os.win11", "Windows 11 or newer", 30, Category::OsSecurity },
                "The installed operating system is Windows 11 or newer.", "Detected")
@@ -147,12 +147,55 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
                                  S.smartAppControlState == Tri::No ? "Off" : "Unknown",
                                  "Smart App Control not enforcing."));
 
-    // UBR identifies the installed update revision; it does not establish recency.
+    // ---- Windows Update (max 100) ----
+    // Preserve the existing rule ID while moving it to the new category.
     rep.rules.push_back(O.ubr > 0
-        ? Full({ "os.patch", "Windows update details available", 30, Category::OsSecurity },
+        ? Full({ "os.patch", "Windows update details available", 30, Category::WindowsUpdate },
                "Windows reported its installed update revision. This does not verify that the latest updates are installed.", "Available")
-        : Zero({ "os.patch", "Windows update details available", 30, Category::OsSecurity }, "Unknown",
+        : Zero({ "os.patch", "Windows update details available", 30, Category::WindowsUpdate }, "Unknown",
                "Windows update revision could not be read."));
+
+    const auto& U = a.windowsUpdate;
+    const R pending{"wu.pending", "Pending Windows updates", 40, Category::WindowsUpdate};
+    if (U.pendingStatus != Status::Success)
+        rep.rules.push_back(Zero(pending, "Unknown", "Pending updates could not be read reliably from Windows Update Agent."));
+    else {
+        const int points = 40 - 5 * static_cast<int>((std::min)(U.pendingCount, 8u));
+        rep.rules.push_back(Partial(pending, points,
+            U.pendingCount ? std::to_string(U.pendingCount) + " pending" : "None cached",
+            "Local Windows Update cache: " + std::to_string(U.pendingCount) +
+            " non-optional updates pending. Five points deducted per update, up to 40; optional updates are informational."));
+    }
+    for (const auto& [name, label] : {std::pair{L"wuauserv", "Windows Update service available"},
+             std::pair{L"BITS", "Update download service available"},
+             std::pair{L"UsoSvc", "Update scheduling service available"}}) {
+        const auto found = std::find_if(U.services.entries.begin(), U.services.entries.end(),
+            [&](const ServiceEntry& service) { return IEquals(service.name, name); });
+        const std::string id = "wu.service." + WideToUtf8(name);
+        const R rule{id.c_str(), label, 5, Category::WindowsUpdate};
+        if (found == U.services.entries.end() || found->status != Status::Success)
+            rep.rules.push_back(Zero(rule, found != U.services.entries.end() && found->status == Status::NotFound
+                ? "Missing" : "Unknown", "The update service's state and configuration could not be verified."));
+        else if (found->startType == L"Disabled")
+            rep.rules.push_back(Zero(rule, "Disabled", "The update service is disabled."));
+        else if (found->state == L"Paused" || found->state == L"StopPending")
+            rep.rules.push_back(Zero(rule, "Not ready", "The update service is paused or stopping."));
+        else if ((found->startType == L"Auto" || found->startType == L"Manual") &&
+            (found->state == L"Running" || found->state == L"Stopped" || found->state == L"StartPending"))
+            rep.rules.push_back(Full(rule, "The service is enabled. Windows update services can stop when idle and start on demand.",
+                found->state == L"Running" ? "Running" : "Available on demand"));
+        else rep.rules.push_back(Zero(rule, "Unknown", "The update service configuration could not be interpreted."));
+    }
+    const R restart{"wu.restart", "Update restart completed", 10, Category::WindowsUpdate};
+    rep.rules.push_back(U.rebootRequired == Tri::No
+        ? Full(restart, "Windows Update does not require a restart.", "Complete")
+        : Zero(restart, U.rebootRequired == Tri::Yes ? "Restart required" : "Unknown",
+            U.rebootRequired == Tri::Yes ? "Restart Windows to finish applying updates." : "Update restart status could not be read."));
+    const R history{"wu.history", "Latest update installation", 5, Category::WindowsUpdate};
+    rep.rules.push_back(U.historyStatus == Status::Success && U.lastInstallationSucceeded == Tri::Yes
+        ? Full(history, "The latest recorded update installation succeeded.", "Succeeded")
+        : Zero(history, U.historyStatus == Status::Success && U.lastInstallationSucceeded == Tri::No
+            ? "Needs attention" : "Unknown", "The latest installation failed, was incomplete, or its result could not be verified."));
 
     // ---- Malware Protection (max 195) ----
     bool anyAvEnabled = false, anyAvUnknown = false;
@@ -273,7 +316,7 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
         rep.rules.push_back(Zero({ "net.svc", "Windows Firewall service", 20, Category::NetworkSecurity }, "Stopped",
                                  "Firewall service not running."));
 
-    // ---- Encryption (max 175) ----
+    // ---- Encryption (max 125) ----
     bool anyBitlockerOn = false, allFixedOn = a.storage.status == Status::Success;
     bool anyBitlockerUnknown = a.storage.status != Status::Success;
     int fixedCount = 0;
@@ -309,12 +352,12 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
                                      : "BitLocker not enabled on any fixed volume."));
 
     rep.rules.push_back(S.tpm.present
-        ? Full({ "enc.tpm", "TPM available to protect keys", 75, Category::Encryption },
+        ? Full({ "enc.tpm", "TPM available to protect keys", 25, Category::Encryption },
                "A TPM security chip is available to store and protect encryption keys.", "Available")
-        : Zero({ "enc.tpm", "TPM available to protect keys", 75, Category::Encryption }, "Absent",
+        : Zero({ "enc.tpm", "TPM available to protect keys", 25, Category::Encryption }, "Absent",
                "No TPM available for key protection."));
 
-    // ---- Account Security (max 100) ----
+    // ---- Account Security (max 80) ----
     if (S.uac.enabled && S.uac.consentPromptAdmin)
         rep.rules.push_back(Full({ "acc.uac2", "Admin actions require a UAC prompt", 50,
                                    Category::AccountSecurity },
@@ -325,10 +368,10 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
                                  "UAC prompt not required for admin actions."));
 
     rep.rules.push_back(S.isElevated
-        ? Full({ "acc.elev", "Assessment has administrator access", 25,
+        ? Full({ "acc.elev", "Assessment has administrator access", 5,
                  Category::AccountSecurity },
                "The assessment is running with administrator access to read restricted system information.", "Granted")
-        : Partial({ "acc.elev", "Assessment has administrator access", 25, Category::AccountSecurity }, 0,
+        : Partial({ "acc.elev", "Assessment has administrator access", 5, Category::AccountSecurity }, 0,
                   "Not granted",
                   "Run as administrator to allow restricted system checks."));
 

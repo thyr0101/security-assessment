@@ -202,15 +202,15 @@ static std::wstring StartName(DWORD s) {
     }
 }
 
-ServiceReport CollectSecurityServices() {
+ServiceReport CollectServices(const std::vector<std::wstring>& names) {
     ServiceReport rep;
     ServiceHandle scm(::OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT));
     if (!scm) { rep.status = StatusFromWin32(::GetLastError()); return rep; }
     rep.status = Status::Success;
-    for (auto* name : kSecurityServices) {
+    for (const auto& name : names) {
         ServiceEntry e;
         e.name = name;
-        ServiceHandle svc(::OpenServiceW(scm.get(), name, SERVICE_QUERY_STATUS | SERVICE_QUERY_CONFIG));
+        ServiceHandle svc(::OpenServiceW(scm.get(), name.c_str(), SERVICE_QUERY_STATUS | SERVICE_QUERY_CONFIG));
         if (!svc) {
             e.status = StatusFromWin32(::GetLastError());
             if (e.status != Status::NotFound) rep.status = e.status;
@@ -239,6 +239,10 @@ ServiceReport CollectSecurityServices() {
         rep.entries.push_back(std::move(e));
     }
     return rep;
+}
+
+ServiceReport CollectSecurityServices() {
+    return CollectServices(std::vector<std::wstring>(std::begin(kSecurityServices), std::end(kSecurityServices)));
 }
 
 } // namespace sa

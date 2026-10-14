@@ -290,6 +290,33 @@ struct ServiceReport {
     Status status = Status::Error;
 };
 
+struct WindowsUpdateItem {
+    std::wstring title;
+    std::wstring id;
+    std::vector<std::wstring> kbArticles;
+    Tri optional = Tri::Unknown;
+    Tri downloaded = Tri::Unknown;
+};
+
+struct WindowsUpdateInfo {
+    // Offline WUA search reads locally cached applicability data only.
+    std::vector<WindowsUpdateItem> updates;
+    unsigned pendingCount = 0;
+    unsigned optionalCount = 0;
+    Status pendingStatus = Status::Unavailable;
+    std::wstring pendingReason;
+    Tri rebootRequired = Tri::Unknown;
+    std::wstring lastSearchUtc;
+    std::wstring lastInstallationUtc;
+    std::wstring lastInstallationTitle;
+    std::wstring lastInstallationResult;
+    std::wstring lastInstallationError;
+    Tri lastInstallationSucceeded = Tri::Unknown;
+    Status historyStatus = Status::Unavailable;
+    ServiceReport services;
+    Status status = Status::Unavailable;
+};
+
 struct ApplicationDefinition {
     std::wstring name;
     std::vector<std::wstring> possiblePaths; // may include env vars
@@ -399,6 +426,7 @@ struct AssessmentResult {
     StorageInfo storage;
     NetworkInfo network;
     ServiceReport services;
+    WindowsUpdateInfo windowsUpdate;
     std::vector<ApplicationFinding> applications;
     std::vector<RegistryFinding> registryFindings;
     std::vector<DirectoryFinding> directoryFindings;

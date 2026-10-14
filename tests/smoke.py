@@ -27,6 +27,12 @@ def main():
         privacy_rule = next(r for r in fixture['score']['rules'] if r['id'].startswith('priv.'))
         assert privacy_rule['id'] == 'priv.quoted "name"'
         assert privacy_rule['reason'] == 'tabs\tand\nnewlines'
+        antivirus = json.loads((Path(scratch) / 'antivirus-output.json').read_text(encoding='utf-8'))
+        assert antivirus['antivirus']['hasThirdParty'] is True
+        assert antivirus['defender']['periodicScanning'] == 'Yes'
+        assert [p['awardedPoints'] for p in antivirus['score']['antivirusScores']] == [200, 0, 0]
+        assert antivirus['score']['antivirusScores'][0]['name'] == 'Example "Antivirus" A'
+        assert antivirus['score']['total'] == 200 and antivirus['score']['maximum'] == 1000
         print(output.strip())
 
     help_text, _ = run(app, '--help')
@@ -38,6 +44,11 @@ def main():
     assert expected <= report.keys()
     assert report['score']['maximum'] == sum(r['maxPoints'] for r in report['score']['rules']) == 1000
     assert report['score']['total'] == sum(r['awardedPoints'] for r in report['score']['rules'])
+    assert 'antivirus' in report and 'periodicScanning' in report['defender']
+    assert len(report['antivirus']['products']) == len(report['score']['antivirusScores'])
+    for product, score in zip(report['antivirus']['products'], report['score']['antivirusScores']):
+        assert score['maxPoints'] == 200
+        assert score['awardedPoints'] == (200 if product['status'] == 'Success' and product['state'] == 'Enabled' else 0)
     assert len({s['name'].lower() for s in report['services']}) == len(report['services'])
     assert all(f['name'] for f in report['registryFindings'])
     assert all(not loc['sha256'] for group in report['applications'] for app_item in group['apps'] for loc in app_item['locations'])

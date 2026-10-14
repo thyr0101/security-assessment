@@ -31,12 +31,21 @@ def main():
         privacy_rule = next(r for r in fixture['score']['rules'] if r['id'].startswith('priv.'))
         assert privacy_rule['id'] == 'priv.quoted "name"'
         assert privacy_rule['reason'] == 'tabs\tand\nnewlines'
+        evaluation = json.loads((Path(scratch) / 'evaluation-output.json').read_text(encoding='utf-8'))
+        evaluation_rules = {rule['id']: rule for rule in evaluation['score']['rules']}
+        assert evaluation_rules['os.sac']['awardedPoints'] == 25 and evaluation_rules['os.sac']['maxPoints'] == 50
+        assert evaluation_rules['os.sac']['state'] == 'Evaluation'
+        assert evaluation_rules['mp.threats']['awardedPoints'] == 20 and evaluation_rules['mp.threats']['state'] == 'Clear'
+        assert evaluation_rules['os.patch']['description'] == 'Windows update details available'
+        assert evaluation_rules['os.patch']['state'] == 'Available'
+        assert sum(rule['maxPoints'] for rule in evaluation_rules.values() if rule['id'].startswith('os.')) == 175
+        assert sum(rule['maxPoints'] for rule in evaluation_rules.values() if rule['id'].startswith('mp.')) == 195
         antivirus = json.loads((Path(scratch) / 'antivirus-output.json').read_text(encoding='utf-8'))
         assert antivirus['antivirus']['hasThirdParty'] is True
         assert antivirus['defender']['periodicScanning'] == 'Yes'
-        assert [p['awardedPoints'] for p in antivirus['score']['antivirusScores']] == [200, 0, 0]
+        assert [p['awardedPoints'] for p in antivirus['score']['antivirusScores']] == [195, 0, 0]
         assert antivirus['score']['antivirusScores'][0]['name'] == 'Example "Antivirus" A'
-        assert antivirus['score']['total'] == 200 and antivirus['score']['maximum'] == 1000
+        assert antivirus['score']['total'] == 195 and antivirus['score']['maximum'] == 1000
         partial = json.loads((Path(scratch) / 'partial-output.json').read_text(encoding='utf-8'))
         assert partial['defender']['cloudProtectionStatus'] == 'Success'
         assert partial['defender']['realTimeProtectionStatus'] == 'Unavailable'
@@ -57,9 +66,19 @@ def main():
     assert 'antivirus' in report and 'periodicScanning' in report['defender']
     assert len(report['antivirus']['products']) == len(report['score']['antivirusScores'])
     for product, score in zip(report['antivirus']['products'], report['score']['antivirusScores']):
-        assert score['maxPoints'] == 200
-        assert score['awardedPoints'] == (200 if product['status'] == 'Success' and product['state'] == 'Enabled' else 0)
+        assert score['maxPoints'] == 195
+        assert score['awardedPoints'] == (195 if product['status'] == 'Success' and product['state'] == 'Enabled' else 0)
     rules = {rule['id']: rule for rule in report['score']['rules']}
+    assert rules['os.sac']['maxPoints'] == 50
+    if rules['os.sac']['state'] == 'Evaluation':
+        assert rules['os.sac']['awardedPoints'] == 25
+    elif rules['os.sac']['state'] == 'Enabled':
+        assert rules['os.sac']['awardedPoints'] == 50
+    else:
+        assert rules['os.sac']['awardedPoints'] == 0
+    if 'mp.threats' in rules:
+        assert rules['mp.threats']['maxPoints'] == 20
+        assert rules['mp.threats']['state'] != 'Enabled'
     for field, rule_id in [('enabled', 'mp.defender'), ('realTimeProtection', 'mp.rtp'),
                            ('behaviorMonitor', 'mp.bm'), ('ioav', 'mp.ioav'),
                            ('cloudProtection', 'mp.cloud'), ('tamperProtection', 'mp.tamper')]:
@@ -76,6 +95,7 @@ def main():
                 assert not loc['sha256'] or len(loc['sha256']) == 64
     console, _ = run(app, '--no-hash')
     assert 'SECURITY SCORE' in console and '\x1b[' not in console
+    assert 'Windows update details available' in console
     print(f"Smoke checks passed: JSON, hashes, help, redirected console; elevated={report['security']['elevated']}.")
     print(f"Elapsed: --no-hash {no_hash_time:.3f}s; hashing {hash_time:.3f}s (single runs, not a benchmark).")
     if args.baseline:

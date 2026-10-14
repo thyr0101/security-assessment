@@ -53,104 +53,108 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
 
     // ---- Hardware Security (max 215) ----
     rep.rules.push_back(S.secureBoot.enabled == Tri::Yes
-        ? Full({ "hw.secureboot", "Secure Boot enabled", 50, Category::HardwareSecurity },
+        ? Full({ "hw.secureboot", "Secure Boot", 50, Category::HardwareSecurity },
                "Secure Boot is enabled and UEFI is the firmware.")
-        : Zero({ "hw.secureboot", "Secure Boot enabled", 50, Category::HardwareSecurity },
+        : Zero({ "hw.secureboot", "Secure Boot", 50, Category::HardwareSecurity },
                S.secureBoot.enabled == Tri::No ? "Disabled" : "Unknown",
                "Secure Boot is not enabled or could not be verified."));
 
     if (S.tpm.present && S.tpm.ready) {
         const bool v2 = Trim(Split(S.tpm.specVersion, L',').front()) == L"2.0";
         rep.rules.push_back(v2
-            ? Full({ "hw.tpm2", "TPM 2.0 present & ready", 50, Category::HardwareSecurity }, "TPM 2.0 is present and ready.")
-            : Partial({ "hw.tpm2", "TPM 2.0 present & ready", 50, Category::HardwareSecurity }, 20,
-                      "VersionUnverified", "TPM is ready, but version 2.0 could not be confirmed."));
+            ? Full({ "hw.tpm2", "TPM 2.0 security chip ready", 50, Category::HardwareSecurity }, "TPM 2.0 is present and ready.", "Ready")
+            : Partial({ "hw.tpm2", "TPM 2.0 security chip ready", 50, Category::HardwareSecurity }, 20,
+                      "Version unverified", "TPM is ready, but version 2.0 could not be confirmed."));
     } else if (S.tpm.present) {
-        rep.rules.push_back(Partial({ "hw.tpm2", "TPM 2.0 present & ready", 50, Category::HardwareSecurity },
-                                    20, "PresentNotReady",
+        rep.rules.push_back(Partial({ "hw.tpm2", "TPM 2.0 security chip ready", 50, Category::HardwareSecurity },
+                                    20, "Not ready",
                                     "TPM is present but not enabled/ready."));
     } else {
-        rep.rules.push_back(Zero({ "hw.tpm2", "TPM 2.0 present & ready", 50, Category::HardwareSecurity },
+        rep.rules.push_back(Zero({ "hw.tpm2", "TPM 2.0 security chip ready", 50, Category::HardwareSecurity },
                                  S.tpm.status == Status::Unavailable ? "Unavailable" : "Absent",
                                  "No usable TPM detected."));
     }
 
     rep.rules.push_back(CpuVirtualizationAvailable(C)
         ? Full({ "hw.virt", "CPU virtualization support", 15, Category::HardwareSecurity },
-               "CPU exposes virtualization extensions.")
+               "CPU virtualization support is available.", "Supported")
         : Zero({ "hw.virt", "CPU virtualization support", 15, Category::HardwareSecurity }, "Absent",
                "CPU virtualization extensions not reported."));
 
     rep.rules.push_back(C.aesni
-        ? Full({ "hw.aes", "CPU AES-NI", 10, Category::HardwareSecurity },
-               "AES-NI instructions available.")
-        : Zero({ "hw.aes", "CPU AES-NI", 10, Category::HardwareSecurity }, "Absent", "AES-NI not reported."));
+        ? Full({ "hw.aes", "Hardware encryption support (AES-NI)", 10, Category::HardwareSecurity },
+               "The CPU supports hardware acceleration for AES encryption.", "Supported")
+        : Zero({ "hw.aes", "Hardware encryption support (AES-NI)", 10, Category::HardwareSecurity }, "Absent", "AES-NI not reported."));
 
     rep.rules.push_back(C.nx
-        ? Full({ "hw.nx", "CPU NX/XD", 10, Category::HardwareSecurity },
-               "NX/XD supported by CPU.")
-        : Zero({ "hw.nx", "CPU NX/XD", 10, Category::HardwareSecurity }, "Absent", "NX/XD not reported."));
+        ? Full({ "hw.nx", "CPU memory protection (NX/XD)", 10, Category::HardwareSecurity },
+               "The CPU can prevent code execution in memory areas reserved for data.", "Supported")
+        : Zero({ "hw.nx", "CPU memory protection (NX/XD)", 10, Category::HardwareSecurity }, "Absent", "NX/XD not reported."));
 
     if (S.virt.vbsEnabled)
-        rep.rules.push_back(Full({ "hw.vbs", "VBS enabled", 40, Category::HardwareSecurity },
-                                 "Virtualization-Based Security is running."));
+        rep.rules.push_back(Full({ "hw.vbs", "Virtualization security (VBS)", 40, Category::HardwareSecurity },
+                                 "Windows uses virtualization to isolate security functions.", "Running"));
     else
-        rep.rules.push_back(Zero({ "hw.vbs", "VBS enabled", 40, Category::HardwareSecurity },
-                                 S.virt.deviceGuardAvailable ? "Disabled" : "Unknown",
+        rep.rules.push_back(Zero({ "hw.vbs", "Virtualization security (VBS)", 40, Category::HardwareSecurity },
+                                 S.virt.deviceGuardAvailable ? "Not running" : "Unknown",
                                  "VBS not detected as running."));
 
     if (S.virt.hvciEnabled)
-        rep.rules.push_back(Full({ "hw.hvci", "HVCI enabled", 40, Category::HardwareSecurity },
-                                 "Hypervisor-enforced Code Integrity is enabled."));
+        rep.rules.push_back(Full({ "hw.hvci", "Memory integrity (HVCI)", 40, Category::HardwareSecurity },
+                                 "Memory integrity protects Windows kernel code using virtualization.", "Running"));
     else
-        rep.rules.push_back(Zero({ "hw.hvci", "HVCI enabled", 40, Category::HardwareSecurity }, "Disabled",
+        rep.rules.push_back(Zero({ "hw.hvci", "Memory integrity (HVCI)", 40, Category::HardwareSecurity }, "Disabled",
                                  "HVCI is not enabled."));
 
-    // ---- OS Security (max 170) ----
+    // ---- OS Security (max 175) ----
     rep.rules.push_back(O.build >= 22000
         ? Full({ "os.win11", "Windows 11 or newer", 30, Category::OsSecurity },
-               "Running a modern Windows build.")
+               "The installed operating system is Windows 11 or newer.", "Detected")
         : Partial({ "os.win11", "Windows 11 or newer", 30, Category::OsSecurity }, 10,
-                  "Older", "Running an older Windows build."));
+                  "Older Windows", "The installed Windows version is older than Windows 11."));
 
     if (S.uac.enabled)
-        rep.rules.push_back(Full({ "os.uac", "UAC enabled", 30, Category::OsSecurity },
+        rep.rules.push_back(Full({ "os.uac", "User Account Control (UAC)", 30, Category::OsSecurity },
                                  "User Account Control is enabled."));
     else
-        rep.rules.push_back(Zero({ "os.uac", "UAC enabled", 30, Category::OsSecurity }, "Disabled",
+        rep.rules.push_back(Zero({ "os.uac", "User Account Control (UAC)", 30, Category::OsSecurity }, "Disabled",
                                  "UAC is disabled."));
 
     if (S.dep.depEnabled == Tri::Yes)
-        rep.rules.push_back(Full({ "os.dep", "DEP enabled", 20, Category::OsSecurity },
+        rep.rules.push_back(Full({ "os.dep", "Data Execution Prevention (DEP)", 20, Category::OsSecurity },
                                  "Data Execution Prevention is active."));
     else
-        rep.rules.push_back(Zero({ "os.dep", "DEP enabled", 20, Category::OsSecurity }, "Disabled",
+        rep.rules.push_back(Zero({ "os.dep", "Data Execution Prevention (DEP)", 20, Category::OsSecurity }, "Disabled",
                                  "DEP is not enforced."));
 
     if (S.dep.sehopEnabled == Tri::Yes)
-        rep.rules.push_back(Full({ "os.sehop", "SEHOP enabled", 15, Category::OsSecurity },
-                                 "Structured Exception Handling Overwrite Protection is on."));
+        rep.rules.push_back(Full({ "os.sehop", "Memory overwrite protection (SEHOP)", 15, Category::OsSecurity },
+                                 "Windows protects exception handling data against memory overwrite attacks."));
     else
-        rep.rules.push_back(Zero({ "os.sehop", "SEHOP enabled", 15, Category::OsSecurity },
+        rep.rules.push_back(Zero({ "os.sehop", "Memory overwrite protection (SEHOP)", 15, Category::OsSecurity },
                                  S.dep.sehopEnabled == Tri::Unknown ? "Unknown" : "Disabled",
                                  "SEHOP is not enabled."));
 
     if (S.smartAppControlOn)
-        rep.rules.push_back(Full({ "os.sac", "Smart App Control", 45, Category::OsSecurity },
+        rep.rules.push_back(Full({ "os.sac", "Smart App Control", 50, Category::OsSecurity },
                                  "Smart App Control is enforcing."));
+    else if (S.smartAppControlEvaluation)
+        rep.rules.push_back(Partial({ "os.sac", "Smart App Control", 50, Category::OsSecurity },
+                                    25, "Evaluation",
+                                    "Smart App Control is evaluating applications without blocking them."));
     else
-        rep.rules.push_back(Zero({ "os.sac", "Smart App Control", 45, Category::OsSecurity },
-                                 S.smartAppControlEvaluation ? "Evaluation" : (S.smartAppControlState == Tri::No ? "Off" : "Unknown"),
+        rep.rules.push_back(Zero({ "os.sac", "Smart App Control", 50, Category::OsSecurity },
+                                 S.smartAppControlState == Tri::No ? "Off" : "Unknown",
                                  "Smart App Control not enforcing."));
 
-    // Update recency based on UBR present (best-effort)
+    // UBR identifies the installed update revision; it does not establish recency.
     rep.rules.push_back(O.ubr > 0
-        ? Full({ "os.patch", "OS patch level readable", 30, Category::OsSecurity },
-               "Build UBR indicates servicing stack data is present.")
-        : Zero({ "os.patch", "OS patch level readable", 30, Category::OsSecurity }, "Unknown",
-               "Could not determine servicing revision."));
+        ? Full({ "os.patch", "Windows update details available", 30, Category::OsSecurity },
+               "Windows reported its installed update revision. This does not verify that the latest updates are installed.", "Available")
+        : Zero({ "os.patch", "Windows update details available", 30, Category::OsSecurity }, "Unknown",
+               "Windows update revision could not be read."));
 
-    // ---- Malware Protection (max 200) ----
+    // ---- Malware Protection (max 195) ----
     bool anyAvEnabled = false, anyAvUnknown = false;
     for (size_t i = 0; i < a.antivirus.products.size(); ++i) {
         const auto& av = a.antivirus.products[i];
@@ -161,8 +165,8 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
         ScoreRuleResult score;
         score.id = "av." + (av.id.empty() ? std::to_string(i) : WideToUtf8(av.id));
         score.description = WideToUtf8(av.name);
-        score.maxPoints = 200;
-        score.awardedPoints = enabled ? 200 : 0;
+        score.maxPoints = kMalwareProtectionMaxPoints;
+        score.awardedPoints = enabled ? kMalwareProtectionMaxPoints : 0;
         score.category = WideToUtf8(ToW(Category::MalwareProtection));
         score.state = known ? WideToUtf8(ToW(av.state)) : "Unknown";
         score.reason = enabled ? "Windows Security Center reports this antivirus enabled."
@@ -173,19 +177,19 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
     rep.registeredAntivirusScoring = HasThirdPartyAntivirus(a.antivirus) ||
         (!a.antivirus.products.empty() && (D.status != Status::Success || !D.enabled));
     if (rep.registeredAntivirusScoring) {
-        const R rule{"mp.registered", "Registered antivirus protection", 200, Category::MalwareProtection};
+        const R rule{"mp.registered", "Registered antivirus protection", kMalwareProtectionMaxPoints, Category::MalwareProtection};
         rep.rules.push_back(anyAvEnabled
             ? Full(rule, "At least one registered antivirus is enabled. Independent product scores are shown separately.")
             : Zero(rule, (anyAvUnknown || a.antivirus.status != Status::Success) ? "Unknown" : "Disabled",
                    "No registered antivirus could be confirmed enabled."));
     } else {
         if (D.installed && D.enabled)
-            rep.rules.push_back(Full({ "mp.defender", "Defender installed & enabled", 40,
+            rep.rules.push_back(Full({ "mp.defender", "Microsoft Defender antivirus", 40,
                                        Category::MalwareProtection },
-                                     "Microsoft Defender is active."));
+                                     "Microsoft Defender is active.", "Active"));
         else
-            rep.rules.push_back(Zero({ "mp.defender", "Defender installed & enabled", 40, Category::MalwareProtection },
-                                     D.installed ? "Disabled" : "Unavailable",
+            rep.rules.push_back(Zero({ "mp.defender", "Microsoft Defender antivirus", 40, Category::MalwareProtection },
+                                     D.installed ? "Inactive" : "Unavailable",
                                      "Defender could not be confirmed active."));
 
         if (D.realTimeProtection)
@@ -196,39 +200,39 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
                                      "Real-time protection is off."));
 
         if (D.behaviorMonitor)
-            rep.rules.push_back(Full({ "mp.bm", "Behavior monitoring", 20, Category::MalwareProtection },
+            rep.rules.push_back(Full({ "mp.bm", "Suspicious behavior monitoring", 20, Category::MalwareProtection },
                                      "Behavior monitoring enabled."));
         else
-            rep.rules.push_back(Zero({ "mp.bm", "Behavior monitoring", 20, Category::MalwareProtection }, "Disabled",
+            rep.rules.push_back(Zero({ "mp.bm", "Suspicious behavior monitoring", 20, Category::MalwareProtection }, "Disabled",
                                      "Behavior monitoring not enabled."));
 
         if (D.ioav)
-            rep.rules.push_back(Full({ "mp.ioav", "IOAV protection", 15, Category::MalwareProtection },
+            rep.rules.push_back(Full({ "mp.ioav", "Downloaded file scanning", 15, Category::MalwareProtection },
                                      "Downloaded-file scanning enabled."));
         else
-            rep.rules.push_back(Zero({ "mp.ioav", "IOAV protection", 15, Category::MalwareProtection }, "Disabled",
+            rep.rules.push_back(Zero({ "mp.ioav", "Downloaded file scanning", 15, Category::MalwareProtection }, "Disabled",
                                      "IOAV scanning not enabled."));
 
         if (D.cloudProtection)
-            rep.rules.push_back(Full({ "mp.cloud", "Cloud protection", 20, Category::MalwareProtection },
+            rep.rules.push_back(Full({ "mp.cloud", "Cloud malware detection", 20, Category::MalwareProtection },
                                      "Cloud-delivered protection enabled."));
         else
-            rep.rules.push_back(Zero({ "mp.cloud", "Cloud protection", 20, Category::MalwareProtection }, "Disabled",
+            rep.rules.push_back(Zero({ "mp.cloud", "Cloud malware detection", 20, Category::MalwareProtection }, "Disabled",
                                      "Cloud-delivered protection not enabled."));
 
         if (D.tamperProtection)
-            rep.rules.push_back(Full({ "mp.tamper", "Tamper protection", 20, Category::MalwareProtection },
-                                     "Tamper protection is on."));
+            rep.rules.push_back(Full({ "mp.tamper", "Antivirus settings protection", 20, Category::MalwareProtection },
+                                     "Defender protects its security settings against unauthorized changes."));
         else
-            rep.rules.push_back(Zero({ "mp.tamper", "Tamper protection", 20, Category::MalwareProtection }, "Disabled",
-                                     "Tamper protection off or unavailable."));
+            rep.rules.push_back(Zero({ "mp.tamper", "Antivirus settings protection", 20, Category::MalwareProtection }, "Disabled",
+                                     "Defender settings protection is disabled or unavailable."));
 
         if (D.installed && D.threatsKnown && D.threatsCount == 0)
-            rep.rules.push_back(Full({ "mp.threats", "No active threats", 25, Category::MalwareProtection },
-                                     "No active threats reported by Defender."));
+            rep.rules.push_back(Full({ "mp.threats", "Defender reports no active threats", 20, Category::MalwareProtection },
+                                     "No active threats reported by Defender.", "Clear"));
         else
-            rep.rules.push_back(Zero({ "mp.threats", "No active threats", 25, Category::MalwareProtection },
-                                     (D.installed && D.threatsKnown) ? "ThreatsPresent" : "Unknown",
+            rep.rules.push_back(Zero({ "mp.threats", "Defender reports no active threats", 20, Category::MalwareProtection },
+                                     (D.installed && D.threatsKnown) ? "Threats found" : "Unknown",
                                      (D.installed && D.threatsKnown)
                                          ? "Active threats reported by Defender."
                                          : "Threat status could not be read."));
@@ -241,32 +245,32 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
         allEnabled &= p.enabled && p.status == Status::Success;
     }
     if (allEnabled && !F.profiles.empty())
-        rep.rules.push_back(Full({ "net.fw", "Firewall enabled on all profiles", 60,
+        rep.rules.push_back(Full({ "net.fw", "Firewall on all network profiles", 60,
                                    Category::NetworkSecurity },
                                  "Firewall enabled on Domain, Private, and Public profiles."));
     else if (anyEnabled)
-        rep.rules.push_back(Partial({ "net.fw", "Firewall enabled on all profiles", 60, Category::NetworkSecurity },
+        rep.rules.push_back(Partial({ "net.fw", "Firewall on all network profiles", 60, Category::NetworkSecurity },
                                     25, "Partial",
                                     "Firewall enabled on some but not all profiles."));
     else
-        rep.rules.push_back(Zero({ "net.fw", "Firewall enabled on all profiles", 60, Category::NetworkSecurity }, "Disabled",
+        rep.rules.push_back(Zero({ "net.fw", "Firewall on all network profiles", 60, Category::NetworkSecurity }, "Disabled",
                                  "Firewall not enabled on any profile."));
 
     bool defInBlock = F.profiles.size() == 3;
     for (auto& p : F.profiles) if (p.defaultInbound != 0 || p.status != Status::Success) { defInBlock = false; break; }
     if (defInBlock && !F.profiles.empty())
-        rep.rules.push_back(Full({ "net.in", "Inbound default block", 20, Category::NetworkSecurity },
-                                 "All profiles default-block inbound traffic."));
+        rep.rules.push_back(Full({ "net.in", "Block incoming traffic by default", 20, Category::NetworkSecurity },
+                                 "Incoming traffic is blocked by default unless a firewall rule allows it.", "Blocking"));
     else
-        rep.rules.push_back(Zero({ "net.in", "Inbound default block", 20, Category::NetworkSecurity }, "AllowOrUnknown",
+        rep.rules.push_back(Zero({ "net.in", "Block incoming traffic by default", 20, Category::NetworkSecurity }, "Allowing or unknown",
                                  "Not all profiles default-block inbound."));
 
     if (F.serviceRunning)
-        rep.rules.push_back(Full({ "net.svc", "Firewall service running", 20,
+        rep.rules.push_back(Full({ "net.svc", "Windows Firewall service", 20,
                                    Category::NetworkSecurity },
-                                 "Windows Defender Firewall service is running."));
+                                 "The Windows Firewall service is running.", "Running"));
     else
-        rep.rules.push_back(Zero({ "net.svc", "Firewall service running", 20, Category::NetworkSecurity }, "Stopped",
+        rep.rules.push_back(Zero({ "net.svc", "Windows Firewall service", 20, Category::NetworkSecurity }, "Stopped",
                                  "Firewall service not running."));
 
     // ---- Encryption (max 175) ----
@@ -286,54 +290,54 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
         if (!known || (v.bitLockerState != L"On" && v.bitLockerState != L"Off")) anyBitlockerUnknown = true;
     }
     if (fixedCount == 0)
-        rep.rules.push_back(Zero({ "enc.bl", "BitLocker on all fixed volumes", 100,
-                                   Category::Encryption }, anyBitlockerUnknown ? "Unknown" : "NoVolumes",
+        rep.rules.push_back(Zero({ "enc.bl", "BitLocker on all fixed drives", 100,
+                                   Category::Encryption }, anyBitlockerUnknown ? "Unknown" : "No fixed drives",
                                  "No fixed volumes could be verified."));
     else if (allFixedOn)
-        rep.rules.push_back(Full({ "enc.bl", "BitLocker on all fixed volumes", 100,
+        rep.rules.push_back(Full({ "enc.bl", "BitLocker on all fixed drives", 100,
                                    Category::Encryption },
-                                 "All fixed volumes are BitLocker-protected."));
+                                 "All detected fixed drives have BitLocker protection active.", "Protected"));
     else if (anyBitlockerOn)
-        rep.rules.push_back(Partial({ "enc.bl", "BitLocker on all fixed volumes", 100, Category::Encryption },
-                                    50, "Partial",
+        rep.rules.push_back(Partial({ "enc.bl", "BitLocker on all fixed drives", 100, Category::Encryption },
+                                    50, "Some drives protected",
                                     "BitLocker protection confirmed on some volumes; full coverage could not be verified."));
     else
-        rep.rules.push_back(Zero({ "enc.bl", "BitLocker on all fixed volumes", 100, Category::Encryption },
+        rep.rules.push_back(Zero({ "enc.bl", "BitLocker on all fixed drives", 100, Category::Encryption },
                                  anyBitlockerUnknown ? "Unknown" : "Disabled",
                                  anyBitlockerUnknown
                                      ? "BitLocker status could not be read (needs elevation)."
                                      : "BitLocker not enabled on any fixed volume."));
 
     rep.rules.push_back(S.tpm.present
-        ? Full({ "enc.tpm", "TPM protects keys", 75, Category::Encryption },
-               "TPM available for key protection.")
-        : Zero({ "enc.tpm", "TPM protects keys", 75, Category::Encryption }, "Absent",
+        ? Full({ "enc.tpm", "TPM available to protect keys", 75, Category::Encryption },
+               "A TPM security chip is available to store and protect encryption keys.", "Available")
+        : Zero({ "enc.tpm", "TPM available to protect keys", 75, Category::Encryption }, "Absent",
                "No TPM available for key protection."));
 
     // ---- Account Security (max 100) ----
     if (S.uac.enabled && S.uac.consentPromptAdmin)
-        rep.rules.push_back(Full({ "acc.uac2", "UAC prompts on elevation", 50,
+        rep.rules.push_back(Full({ "acc.uac2", "Admin actions require a UAC prompt", 50,
                                    Category::AccountSecurity },
-                                 "UAC prompts for admin consent."));
+                                 "Administrator actions require a UAC consent or credentials prompt.", "Required"));
     else
-        rep.rules.push_back(Zero({ "acc.uac2", "UAC prompts on elevation", 50, Category::AccountSecurity },
-                                 S.uac.enabled ? "Weakened" : "Disabled",
+        rep.rules.push_back(Zero({ "acc.uac2", "Admin actions require a UAC prompt", 50, Category::AccountSecurity },
+                                 "Not required",
                                  "UAC prompt not required for admin actions."));
 
     rep.rules.push_back(S.isElevated
-        ? Full({ "acc.elev", "Process can read privileged data", 25,
+        ? Full({ "acc.elev", "Assessment has administrator access", 25,
                  Category::AccountSecurity },
-               "Running elevated (improves assessment fidelity).")
-        : Partial({ "acc.elev", "Process can read privileged data", 25, Category::AccountSecurity }, 0,
-                  "NotElevated",
-                  "Not running elevated; privileged checks may be unavailable."));
+               "The assessment is running with administrator access to read restricted system information.", "Granted")
+        : Partial({ "acc.elev", "Assessment has administrator access", 25, Category::AccountSecurity }, 0,
+                  "Not granted",
+                  "Run as administrator to allow restricted system checks."));
 
     if (S.windowsHelloAvailable)
-        rep.rules.push_back(Full({ "acc.hello", "Windows Hello available", 25,
+        rep.rules.push_back(Full({ "acc.hello", "Windows Hello sign-in support", 25,
                                    Category::AccountSecurity },
-                                 "Windows Hello infrastructure available."));
+                                 "Windows Hello sign-in components were detected.", "Available"));
     else
-        rep.rules.push_back(Zero({ "acc.hello", "Windows Hello available", 25, Category::AccountSecurity }, "Unknown",
+        rep.rules.push_back(Zero({ "acc.hello", "Windows Hello sign-in support", 25, Category::AccountSecurity }, "Unknown",
                                  "Windows Hello availability not detected."));
 
     // ---- Privacy (informational; no score weight) ----
@@ -351,22 +355,22 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
 
     // ---- Hardening / Software Hygiene (max 40) ----
     rep.rules.push_back(a.persistence.status != Status::Success
-        ? Zero({ "hyg.startup", "Startup items enumerated", 20, Category::SoftwareHygiene },
+        ? Zero({ "hyg.startup", "Startup application scan", 20, Category::SoftwareHygiene },
                "Unknown", "Startup inventory could not be completed.")
         : a.persistence.entries.empty()
-        ? Full({ "hyg.startup", "Startup items enumerated", 20, Category::SoftwareHygiene },
-               "No entries found in the configured startup locations.")
-        : Full({ "hyg.startup", "Startup items enumerated", 20, Category::SoftwareHygiene },
-               std::to_string(a.persistence.entries.size()) + " startup entries enumerated."));
+        ? Full({ "hyg.startup", "Startup application scan", 20, Category::SoftwareHygiene },
+               "The selected startup locations were checked; no entries were found.", "Complete")
+        : Full({ "hyg.startup", "Startup application scan", 20, Category::SoftwareHygiene },
+               std::to_string(a.persistence.entries.size()) + " startup entries found in the selected locations.", "Complete"));
 
     const bool inventoryComplete = !a.applications.empty() && std::all_of(
         a.applications.begin(), a.applications.end(), [](const ApplicationFinding& app) {
             return app.status == Status::Success || app.status == Status::NotFound;
         });
-    rep.rules.push_back(inventoryComplete ? Full({ "hyg.appinv", "Application inventory complete", 20,
+    rep.rules.push_back(inventoryComplete ? Full({ "hyg.appinv", "Selected application scan", 20,
                                Category::SoftwareHygiene },
-                             "Application presence determined for all configured apps.")
-        : Zero({ "hyg.appinv", "Application inventory complete", 20, Category::SoftwareHygiene },
+                             "Installation status was checked for every application in the configured list.", "Complete")
+        : Zero({ "hyg.appinv", "Selected application scan", 20, Category::SoftwareHygiene },
                "Unknown", "Application inventory could not be completed."));
 
     // Failed collection must not become a definite disabled/absent state or earn points.

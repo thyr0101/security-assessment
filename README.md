@@ -90,11 +90,15 @@ Collection uses native Windows APIs, COM/WMI, and the C++ standard library. No e
 
 Defender JSON fields have individual status companions (for example, `cloudProtectionStatus`) because optional property reads can fail even when the main status query succeeds. `servicesStatus` and `persistenceStatus` describe inventory completeness. Full BitLocker coverage credit requires complete volume enumeration and successful protection-status reads.
 
+## Scoring
+
+Smart App Control earns 25/50 points in evaluation mode and 50/50 when enabled. Disabled or unavailable states earn zero. Defender's no-active-threats check contributes 20 points. The OS category totals 175 points and malware protection totals 195, keeping the overall maximum at 1000. Score states describe each result, such as Supported, Available, Clear, Running, or Complete. "Windows update details available" confirms that the installed update revision was readable; it does not establish that Windows is up to date.
+
 ## Registered antivirus fallback
 
-The app reads antivirus registrations through the native Windows Security Center COM API. When a third-party antivirus is registered, the console lists every registered product and its reported state instead of the inactive Defender feature list. Each product receives an independent score of 200/200 when Windows reports it enabled, or 0/200 otherwise. Disabled, snoozed, expired, and unreadable states receive no credit. Signature currency is informational.
+The app reads antivirus registrations through the native Windows Security Center COM API. When a third-party antivirus is registered, the console lists every registered product and its reported state instead of the inactive Defender feature list. Each product receives an independent score of 195/195 when Windows reports it enabled, or 0/195 otherwise. Disabled, snoozed, expired, and unreadable states receive no credit. Signature currency is informational.
 
-The malware category contributes at most 200 points to the overall 1000-point score: any confirmed enabled product satisfies this category. Multiple enabled products do not multiply the overall score. Normal Defender-only operation retains the existing detailed scoring; registration scoring also provides a fallback when Defender's own status is unavailable or inactive.
+The malware category contributes at most 195 points to the overall 1000-point score: any confirmed enabled product satisfies this category. Multiple enabled products do not multiply the overall score. Normal Defender-only operation retains the existing detailed scoring; registration scoring also provides a fallback when Defender's own status is unavailable or inactive.
 
 When a third-party antivirus is registered, Defender periodic scanning is shown separately and never affects scoring. Its state comes from Defender's `AMRunningMode` (`SxS Passive Mode` means enabled); unavailable or unrecognized modes display Unknown. JSON includes registration details under `antivirus`, separate product scores under `score.antivirusScores`, and `defender.periodicScanning`.
 

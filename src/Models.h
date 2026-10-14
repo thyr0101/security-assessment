@@ -383,7 +383,7 @@ struct ScoreReport {
     int total = 0;
     int maximum = 1000;
     std::vector<ScoreRuleResult> rules;
-    // Independent /200 product scores, excluded from the overall sum.
+    // Independent product scores, excluded from the overall sum.
     std::vector<ScoreRuleResult> antivirusScores;
     bool registeredAntivirusScoring = false;
 };

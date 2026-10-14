@@ -145,6 +145,33 @@ static void TestScoreAndJson() {
     ApplicationFinding app; app.status = Status::NotFound; result.applications.push_back(app);
     auto healthy = ComputeScore(result);
     Check(healthy.total == 1000 && healthy.maximum == 1000, "fully satisfied rules retain 1000-point scale");
+    Check(Rule(healthy, "os.sac").awardedPoints == 50 && Rule(healthy, "os.sac").maxPoints == 50,
+          "enforcing Smart App Control earns 50 points");
+    Check(Rule(healthy, "mp.threats").awardedPoints == 20 && Rule(healthy, "mp.threats").maxPoints == 20 &&
+          Rule(healthy, "mp.threats").state == "Clear", "no active threats earns 20 points with a meaningful state");
+    s.smartAppControlOn = false; s.smartAppControlEvaluation = true; s.smartAppControlState = Tri::No;
+    const auto evaluation = ComputeScore(result);
+    Check(evaluation.total == 975 && evaluation.maximum == 1000 &&
+          Rule(evaluation, "os.sac").awardedPoints == 25 && Rule(evaluation, "os.sac").state == "Evaluation",
+          "evaluation mode earns 25 of 50 points on the 1000-point scale");
+    result.score = evaluation;
+    std::ofstream("evaluation-output.json", std::ios::binary) << RenderJson(result);
+    s.smartAppControlEvaluation = false;
+    Check(Rule(ComputeScore(result), "os.sac").awardedPoints == 0 && Rule(ComputeScore(result), "os.sac").state == "Off",
+          "disabled Smart App Control earns zero");
+    s.smartAppControlState = Tri::Unknown;
+    Check(Rule(ComputeScore(result), "os.sac").awardedPoints == 0 && Rule(ComputeScore(result), "os.sac").state == "Unknown",
+          "unreadable Smart App Control earns zero");
+    s.smartAppControlOn = true; s.smartAppControlState = Tri::Yes;
+    d.threatsCount = 1;
+    Check(Rule(ComputeScore(result), "mp.threats").awardedPoints == 0 &&
+          Rule(ComputeScore(result), "mp.threats").state == "Threats found", "active threats earn zero with a clear state");
+    d.threatsCount = 0;
+    for (const auto* id : {"hw.tpm2", "hw.virt", "hw.aes", "hw.nx", "hw.vbs", "hw.hvci", "os.win11",
+                           "os.patch", "mp.defender", "mp.threats", "net.in", "net.svc", "enc.bl", "enc.tpm",
+                           "acc.uac2", "acc.elev", "acc.hello", "hyg.startup", "hyg.appinv"}) {
+        Check(Rule(healthy, id).state != "Enabled", "capabilities, facts, and scan results do not use Enabled");
+    }
     int sum = 0; for (const auto& rule : healthy.rules) sum += rule.awardedPoints;
     Check(sum == healthy.total, "rule sum matches score");
     s.tpm.specVersion = L"1.2";
@@ -280,11 +307,11 @@ static void TestRegisteredAntivirus() {
     result.defender.amRunningMode = L"SxS Passive Mode";
     result.score = ComputeScore(result);
     Check(result.score.registeredAntivirusScoring, "third-party AV selects registration scoring");
-    Check(result.score.total == 200 && result.score.maximum == 1000, "enabled third-party AV earns malware section only");
-    Check(result.score.antivirusScores.size() == 3 && result.score.antivirusScores[0].awardedPoints == 200 &&
+    Check(result.score.total == 195 && result.score.maximum == 1000, "enabled third-party AV earns malware section only");
+    Check(result.score.antivirusScores.size() == 3 && result.score.antivirusScores[0].awardedPoints == 195 &&
           result.score.antivirusScores[1].awardedPoints == 0 && result.score.antivirusScores[2].awardedPoints == 0,
           "independent product scores when Defender is inactive");
-    Check(Rule(result.score, "mp.registered").awardedPoints == 200, "Defender WMI failure must not erase WSC credit");
+    Check(Rule(result.score, "mp.registered").awardedPoints == 195, "Defender WMI failure must not erase WSC credit");
     std::ofstream("antivirus-output.json", std::ios::binary) << RenderJson(result);
     std::wostringstream captured;
     auto* old = std::wcout.rdbuf(captured.rdbuf());
@@ -292,18 +319,24 @@ static void TestRegisteredAntivirus() {
     std::wcout.rdbuf(old);
     Check(captured.str().find(first.name) != std::wstring::npos && captured.str().find(second.name) != std::wstring::npos,
           "console names both third-party products");
-    Check(captured.str().find(L"200 / 200") != std::wstring::npos && captured.str().find(L"0 / 200") != std::wstring::npos,
+    Check(captured.str().find(L"195 / 195") != std::wstring::npos && captured.str().find(L"0 / 195") != std::wstring::npos,
           "console shows each antivirus score");
     Check(captured.str().find(L"Periodic scanning") != std::wstring::npos && captured.str().find(L"Real-Time") == std::wstring::npos,
           "fallback replaces inactive Defender detail and shows periodic scanning");
     for (Tri periodic : {Tri::No, Tri::Yes, Tri::Unknown}) {
         result.defender.periodicScanning = periodic;
-        Check(ComputeScore(result).total == 200, "periodic scanning must never affect score");
+        Check(ComputeScore(result).total == 195, "periodic scanning must never affect score");
     }
     result.antivirus.products[1].state = AntivirusState::Enabled;
     auto both = ComputeScore(result);
-    Check(both.total == 200 && both.antivirusScores[0].awardedPoints == 200 && both.antivirusScores[1].awardedPoints == 200,
+    Check(both.total == 195 && both.antivirusScores[0].awardedPoints == 195 && both.antivirusScores[1].awardedPoints == 195,
           "two enabled AVs score separately without inflating total");
+    result.security.smartAppControlEvaluation = true;
+    const auto evaluatedWithAv = ComputeScore(result);
+    Check(evaluatedWithAv.total == 220 && evaluatedWithAv.maximum == 1000 &&
+          Rule(evaluatedWithAv, "mp.registered").maxPoints == 195,
+          "registered antivirus and SAC evaluation preserve the 1000-point scale");
+    result.security.smartAppControlEvaluation = false;
     result.antivirus.products[1].state = AntivirusState::Disabled;
     for (auto state : {AntivirusState::Disabled, AntivirusState::Snoozed, AntivirusState::Expired, AntivirusState::Unknown}) {
         result.antivirus.products[0].state = state;
@@ -314,7 +347,7 @@ static void TestRegisteredAntivirus() {
     Check(ComputeScore(result).total == 0, "unreadable enabled field cannot earn points");
     result.antivirus.products = {defender};
     result.antivirus.products[0].state = AntivirusState::Enabled;
-    Check(ComputeScore(result).total == 200, "registered Defender fallback works when its WMI provider is unavailable");
+    Check(ComputeScore(result).total == 195, "registered Defender fallback works when its WMI provider is unavailable");
     result.defender.status = Status::Success; result.defender.enabled = result.defender.installed = true;
     result.defender.enabledStatus = Status::Success;
     auto defenderOnly = ComputeScore(result);

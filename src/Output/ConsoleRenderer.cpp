@@ -238,7 +238,7 @@ void RenderConsole(const AssessmentResult& r) {
         defenderFlag(L"Defender", r.defender.enabled, r.defender.enabledStatus);
         defenderFlag(L"Real-Time", r.defender.realTimeProtection, r.defender.realTimeProtectionStatus);
         defenderFlag(L"Behavior Monitoring", r.defender.behaviorMonitor, r.defender.behaviorMonitorStatus);
-        defenderFlag(L"IOAV Protection", r.defender.ioav, r.defender.ioavStatus);
+        defenderFlag(L"Download scanning", r.defender.ioav, r.defender.ioavStatus);
         defenderFlag(L"Cloud Protection", r.defender.cloudProtection, r.defender.cloudProtectionStatus);
         defenderFlag(L"Tamper Protection", r.defender.tamperProtection, r.defender.tamperProtectionStatus);
         KV(L"Engine Version", r.defender.amEngineVersion);
@@ -269,7 +269,8 @@ void RenderConsole(const AssessmentResult& r) {
             }
             KV(L"Signatures current", ToW(av.signaturesUpToDate));
         }
-        KV(L"Overall contribution", L"At most 200 points; product scores are independent.", Dim());
+        KV(L"Overall contribution", L"At most " + Num(kMalwareProtectionMaxPoints) +
+            L" points; product scores are independent.", Dim());
     }
     if (r.antivirus.status != Status::Success && !r.antivirus.reason.empty())
         KV(L"Antivirus query", r.antivirus.reason, Yel());
@@ -404,8 +405,10 @@ void RenderConsole(const AssessmentResult& r) {
 
     // Rules arrive grouped by id prefix; keep their order and add a sub-heading per group.
     std::vector<std::string> prefixes;
+    size_t descriptionWidth = 36;
     for (auto& rl : r.score.rules) {
         if (rl.maxPoints == 0) continue;               // informational-only entries
+        descriptionWidth = (std::max)(descriptionWidth, Utf8ToWide(rl.description).size() + 2);
         const std::string p = rl.id.substr(0, rl.id.find('.'));
         bool seen = false;
         for (auto& q : prefixes) if (q == p) { seen = true; break; }
@@ -428,7 +431,7 @@ void RenderConsole(const AssessmentResult& r) {
             const wchar_t* c = OutcomeColor(rl.awardedPoints, rl.maxPoints);
             out() << L"    " << c << PadLeft(Num(rl.awardedPoints), 3) << Rst() << Dim() << L" / " << Rst()
                   << Lbl() << PadLeft(Num(rl.maxPoints), 3) << Rst() << L"   "
-                  << PadRight(Utf8ToWide(rl.description), 36)
+                  << PadRight(Utf8ToWide(rl.description), descriptionWidth)
                   << c << L"[" << Utf8ToWide(rl.state) << L"]" << Rst() << L"\n";
         }
     }

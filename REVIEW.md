@@ -36,10 +36,10 @@ References: [WMI numeric representations](https://learn.microsoft.com/en-us/wind
 
 ### Registered antivirus support
 
-Added native Windows Security Center product enumeration, independent 200-point product scores, and a capped 200-point malware category fallback. Defender-only detailed scoring remains available. Defender periodic scanning is informational and uses its reported running mode; missing evidence stays unknown. Both console and JSON expose the results. Synthetic coverage includes multiple enabled/disabled products, inaccessible states, Defender provider failure, and periodic-scanning score independence.
+Added native Windows Security Center product enumeration, independent 195-point product scores, and a capped 195-point malware category fallback. Defender-only detailed scoring remains available. Defender periodic scanning is informational and uses its reported running mode; missing evidence stays unknown. Both console and JSON expose the results. Synthetic coverage includes multiple enabled/disabled products, inaccessible states, Defender provider failure, and periodic-scanning score independence.
 
 - Existing CLI options, report sections, and JSON keys remain. New JSON status/context fields are additive.
-- Corrected readings and rules can change scores. Full credit remains 1000. Registration fallback replaces the granular malware rules with `mp.registered` (200 points); other rule IDs and weights remain.
+- Corrected readings and rules can change scores. Full credit remains 1000. Smart App Control earns 25/50 in evaluation mode and 50/50 when enforcing; the no-active-threats check earns 20 points. Registration fallback replaces the granular malware rules with `mp.registered` (195 points). Rule IDs remain stable; descriptions and states use clearer user-facing wording.
 - Application definitions and threshold definitions remain configured in C++.
 - The tool still reports a security posture, not malware detection or proof of security. Boolean model fields may need their accompanying status/context to distinguish unavailable data.
 

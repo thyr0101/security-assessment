@@ -151,59 +151,88 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
                "Could not determine servicing revision."));
 
     // ---- Malware Protection (max 200) ----
-    if (D.installed && D.enabled)
-        rep.rules.push_back(Full({ "mp.defender", "Defender installed & enabled", 40,
-                                   Category::MalwareProtection },
-                                 "Microsoft Defender is active."));
-    else
-        rep.rules.push_back(Zero({ "mp.defender", "Defender installed & enabled", 40, Category::MalwareProtection },
-                                 D.installed ? "Disabled" : "Unavailable",
-                                 "Defender could not be confirmed active."));
+    bool anyAvEnabled = false, anyAvUnknown = false;
+    for (size_t i = 0; i < a.antivirus.products.size(); ++i) {
+        const auto& av = a.antivirus.products[i];
+        const bool enabled = av.status == Status::Success && av.state == AntivirusState::Enabled;
+        const bool known = av.status == Status::Success && av.state != AntivirusState::Unknown;
+        anyAvEnabled |= enabled;
+        anyAvUnknown |= !known;
+        ScoreRuleResult score;
+        score.id = "av." + (av.id.empty() ? std::to_string(i) : WideToUtf8(av.id));
+        score.description = WideToUtf8(av.name);
+        score.maxPoints = 200;
+        score.awardedPoints = enabled ? 200 : 0;
+        score.category = WideToUtf8(ToW(Category::MalwareProtection));
+        score.state = known ? WideToUtf8(ToW(av.state)) : "Unknown";
+        score.reason = enabled ? "Windows Security Center reports this antivirus enabled."
+            : known ? "Windows Security Center does not report this antivirus actively protecting the computer."
+            : "Windows Security Center could not report this antivirus state.";
+        rep.antivirusScores.push_back(std::move(score));
+    }
+    rep.registeredAntivirusScoring = HasThirdPartyAntivirus(a.antivirus) ||
+        (!a.antivirus.products.empty() && (D.status != Status::Success || !D.enabled));
+    if (rep.registeredAntivirusScoring) {
+        const R rule{"mp.registered", "Registered antivirus protection", 200, Category::MalwareProtection};
+        rep.rules.push_back(anyAvEnabled
+            ? Full(rule, "At least one registered antivirus is enabled. Independent product scores are shown separately.")
+            : Zero(rule, (anyAvUnknown || a.antivirus.status != Status::Success) ? "Unknown" : "Disabled",
+                   "No registered antivirus could be confirmed enabled."));
+    } else {
+        if (D.installed && D.enabled)
+            rep.rules.push_back(Full({ "mp.defender", "Defender installed & enabled", 40,
+                                       Category::MalwareProtection },
+                                     "Microsoft Defender is active."));
+        else
+            rep.rules.push_back(Zero({ "mp.defender", "Defender installed & enabled", 40, Category::MalwareProtection },
+                                     D.installed ? "Disabled" : "Unavailable",
+                                     "Defender could not be confirmed active."));
 
-    if (D.realTimeProtection)
-        rep.rules.push_back(Full({ "mp.rtp", "Real-time protection", 60, Category::MalwareProtection },
-                                 "Real-time protection is enabled."));
-    else
-        rep.rules.push_back(Zero({ "mp.rtp", "Real-time protection", 60, Category::MalwareProtection }, "Disabled",
-                                 "Real-time protection is off."));
+        if (D.realTimeProtection)
+            rep.rules.push_back(Full({ "mp.rtp", "Real-time protection", 60, Category::MalwareProtection },
+                                     "Real-time protection is enabled."));
+        else
+            rep.rules.push_back(Zero({ "mp.rtp", "Real-time protection", 60, Category::MalwareProtection }, "Disabled",
+                                     "Real-time protection is off."));
 
-    if (D.behaviorMonitor)
-        rep.rules.push_back(Full({ "mp.bm", "Behavior monitoring", 20, Category::MalwareProtection },
-                                 "Behavior monitoring enabled."));
-    else
-        rep.rules.push_back(Zero({ "mp.bm", "Behavior monitoring", 20, Category::MalwareProtection }, "Disabled",
-                                 "Behavior monitoring not enabled."));
+        if (D.behaviorMonitor)
+            rep.rules.push_back(Full({ "mp.bm", "Behavior monitoring", 20, Category::MalwareProtection },
+                                     "Behavior monitoring enabled."));
+        else
+            rep.rules.push_back(Zero({ "mp.bm", "Behavior monitoring", 20, Category::MalwareProtection }, "Disabled",
+                                     "Behavior monitoring not enabled."));
 
-    if (D.ioav)
-        rep.rules.push_back(Full({ "mp.ioav", "IOAV protection", 15, Category::MalwareProtection },
-                                 "Downloaded-file scanning enabled."));
-    else
-        rep.rules.push_back(Zero({ "mp.ioav", "IOAV protection", 15, Category::MalwareProtection }, "Disabled",
-                                 "IOAV scanning not enabled."));
+        if (D.ioav)
+            rep.rules.push_back(Full({ "mp.ioav", "IOAV protection", 15, Category::MalwareProtection },
+                                     "Downloaded-file scanning enabled."));
+        else
+            rep.rules.push_back(Zero({ "mp.ioav", "IOAV protection", 15, Category::MalwareProtection }, "Disabled",
+                                     "IOAV scanning not enabled."));
 
-    if (D.cloudProtection)
-        rep.rules.push_back(Full({ "mp.cloud", "Cloud protection", 20, Category::MalwareProtection },
-                                 "Cloud-delivered protection enabled."));
-    else
-        rep.rules.push_back(Zero({ "mp.cloud", "Cloud protection", 20, Category::MalwareProtection }, "Disabled",
-                                 "Cloud-delivered protection not enabled."));
+        if (D.cloudProtection)
+            rep.rules.push_back(Full({ "mp.cloud", "Cloud protection", 20, Category::MalwareProtection },
+                                     "Cloud-delivered protection enabled."));
+        else
+            rep.rules.push_back(Zero({ "mp.cloud", "Cloud protection", 20, Category::MalwareProtection }, "Disabled",
+                                     "Cloud-delivered protection not enabled."));
 
-    if (D.tamperProtection)
-        rep.rules.push_back(Full({ "mp.tamper", "Tamper protection", 20, Category::MalwareProtection },
-                                 "Tamper protection is on."));
-    else
-        rep.rules.push_back(Zero({ "mp.tamper", "Tamper protection", 20, Category::MalwareProtection }, "Disabled",
-                                 "Tamper protection off or unavailable."));
+        if (D.tamperProtection)
+            rep.rules.push_back(Full({ "mp.tamper", "Tamper protection", 20, Category::MalwareProtection },
+                                     "Tamper protection is on."));
+        else
+            rep.rules.push_back(Zero({ "mp.tamper", "Tamper protection", 20, Category::MalwareProtection }, "Disabled",
+                                     "Tamper protection off or unavailable."));
 
-    if (D.installed && D.threatsKnown && D.threatsCount == 0)
-        rep.rules.push_back(Full({ "mp.threats", "No active threats", 25, Category::MalwareProtection },
-                                 "No active threats reported by Defender."));
-    else
-        rep.rules.push_back(Zero({ "mp.threats", "No active threats", 25, Category::MalwareProtection },
-                                 (D.installed && D.threatsKnown) ? "ThreatsPresent" : "Unknown",
-                                 (D.installed && D.threatsKnown)
-                                     ? "Active threats reported by Defender."
-                                     : "Threat status could not be read."));
+        if (D.installed && D.threatsKnown && D.threatsCount == 0)
+            rep.rules.push_back(Full({ "mp.threats", "No active threats", 25, Category::MalwareProtection },
+                                     "No active threats reported by Defender."));
+        else
+            rep.rules.push_back(Zero({ "mp.threats", "No active threats", 25, Category::MalwareProtection },
+                                     (D.installed && D.threatsKnown) ? "ThreatsPresent" : "Unknown",
+                                     (D.installed && D.threatsKnown)
+                                         ? "Active threats reported by Defender."
+                                         : "Threat status could not be read."));
+    }
 
     // ---- Network Security (max 100) ----
     bool anyEnabled = false, allEnabled = F.profiles.size() == 3;
@@ -337,7 +366,7 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
     // Failed collection must not become a definite disabled/absent state or earn points.
     for (auto& rule : rep.rules) {
         bool unknown = false;
-        if (rule.id.starts_with("mp.")) unknown = D.status != Status::Success;
+        if (rule.id.starts_with("mp.") && rule.id != "mp.registered") unknown = D.status != Status::Success;
         else if (rule.id.starts_with("os.win") || rule.id == "os.patch") unknown = O.status != Status::Success;
         else if (rule.id == "os.uac" || rule.id == "acc.uac2") unknown = S.uac.status != Status::Success;
         else if (rule.id == "hw.virt" || rule.id == "hw.aes" || rule.id == "hw.nx") unknown = C.status != Status::Success;

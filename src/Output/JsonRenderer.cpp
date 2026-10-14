@@ -245,7 +245,10 @@ std::string RenderJson(const AssessmentResult& r) {
     for (size_t i = 0; i < r.storage.volumes.size(); ++i) {
         auto& v = r.storage.volumes[i];
         if (i) o << ",";
-        o << "{\"mountPoint\":" << Q(v.mountPoint)
+        o << "{\"volumeId\":" << Q(v.volumeId) << ",\"diskMappingStatus\":" << StatusS(v.diskMappingStatus)
+          << ",\"diskIndices\":[";
+        for (size_t j = 0; j < v.diskIndices.size(); ++j) { if (j) o << ","; o << v.diskIndices[j]; }
+        o << "],\"mountPoint\":" << Q(v.mountPoint)
             << ",\"volumeLabel\":" << Q(v.volumeLabel)     // <-- renamed member
             << ",\"filesystem\":" << Q(v.filesystem)
             << ",\"totalBytes\":" << v.totalBytes
@@ -372,7 +375,10 @@ std::string RenderJson(const AssessmentResult& r) {
         if (i) o << ",";
         o << "{\"name\":" << Q(p.name)
           << ",\"value\":" << Q(p.value)
-          << ",\"explanation\":" << Q(p.explanation) << "}";
+          << ",\"explanation\":" << Q(p.explanation)
+          << ",\"status\":" << StatusS(p.status)
+          << ",\"scope\":" << Q(p.scope)
+          << ",\"group\":" << Q(p.group) << "}";
     }
     o << "],";
 

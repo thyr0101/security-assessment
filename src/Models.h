@@ -233,6 +233,8 @@ struct StorageVolume {
     std::wstring encryptionPercentage;
     std::wstring encryptionMethod;   // e.g. "XTS-AES 256"; empty if not encrypted/unknown
     std::wstring bitLockerNote;      // why the state is Unknown (diagnostic)
+    std::vector<unsigned> diskIndices; // PhysicalDrive numbers returned by volume extents.
+    Status diskMappingStatus = Status::Unavailable;
 };
 
 struct StorageDisk {
@@ -387,6 +389,9 @@ struct PrivacyFinding {
     Category category = Category::Privacy;
     Severity severity = Severity::Informational;
     std::wstring explanation;
+    Status status = Status::Unavailable;
+    std::wstring scope;
+    std::wstring group;
 };
 
 struct PersistenceEntry {

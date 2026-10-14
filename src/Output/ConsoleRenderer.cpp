@@ -35,12 +35,6 @@ const wchar_t* Wht()  { return K(L"\x1b[97m"); }
 
 // ---- glyphs: Unicode on a color console, ASCII otherwise (safe for log files) ----
 const wchar_t* GHLine()  { return g_color ? L"\u2500" : L"-"; }
-const wchar_t* GHeavy()  { return g_color ? L"\u2550" : L"="; }
-const wchar_t* GTL()     { return g_color ? L"\u2554" : L"+"; }
-const wchar_t* GTR()     { return g_color ? L"\u2557" : L"+"; }
-const wchar_t* GBL()     { return g_color ? L"\u255A" : L"+"; }
-const wchar_t* GBR()     { return g_color ? L"\u255D" : L"+"; }
-const wchar_t* GVert()   { return g_color ? L"\u2551" : L"|"; }
 const wchar_t* GFull()   { return g_color ? L"\u2588" : L"#"; }
 const wchar_t* GEmpty()  { return g_color ? L"\u2591" : L"."; }
 const wchar_t* GTee()    { return g_color ? L"\u251C\u2500" : L"|-"; }
@@ -85,15 +79,8 @@ std::wstring Bar(double frac, size_t width, const wchar_t* color) {
 
 // ---- layout helpers ----
 void Banner(const wchar_t* title) {
-    const std::wstring t = title;
-    const size_t inner = (std::max)(kWidth - 2, t.size());
-    const size_t left = (inner - t.size()) / 2;
-    const size_t right = inner - t.size() - left;
-    out() << Cyn() << GTL() << Repeat(GHeavy(), inner) << GTR() << Rst() << L"\n"
-          << Cyn() << GVert() << Rst() << std::wstring(left, L' ')
-          << Bold() << Wht() << t << Rst() << std::wstring(right, L' ')
-          << Cyn() << GVert() << Rst() << L"\n"
-          << Cyn() << GBL() << Repeat(GHeavy(), inner) << GBR() << Rst() << L"\n";
+    out() << Bold() << Cyn() << title << Rst() << L"\n";
+    out() << Dim() << Repeat(GHLine(), kWidth) << Rst() << L"\n";
 }
 
 void Section(const wchar_t* title) {
@@ -106,7 +93,7 @@ void Section(const wchar_t* title) {
 }
 
 void SubHeader(const std::wstring& title, const std::wstring& right, const wchar_t* rightColor) {
-    out() << L"\n  " << Bold() << Wht() << title << Rst();
+    out() << L"  " << Bold() << Wht() << title << Rst();
     if (!right.empty()) out() << L"  " << rightColor << right << Rst();
     out() << L"\n";
 }
@@ -117,6 +104,25 @@ void KV(const wchar_t* label, const std::wstring& value, const wchar_t* color = 
           << (color ? color : Wht()) << value << Rst() << L"\n";
 }
 
+// Pair short facts only when their full values fit; never truncate report data.
+void Pair(const wchar_t* first, const std::wstring& value, const wchar_t* second,
+          const std::wstring& other, const wchar_t* color = nullptr, const wchar_t* otherColor = nullptr) {
+    CONSOLE_SCREEN_BUFFER_INFO info{};
+    size_t width = 100; // plain reports have a predictable, readable width
+    if (::GetConsoleScreenBufferInfo(::GetStdHandle(STD_OUTPUT_HANDLE), &info))
+        width = static_cast<size_t>(info.srWindow.Right - info.srWindow.Left + 1);
+    const size_t cell = (std::max)(kLabel, std::wstring(first).size() + 1) + value.size();
+    const size_t secondCell = (std::max)(kLabel, std::wstring(second).size() + 1) + other.size();
+    const size_t column = (std::max)(size_t{46}, cell + 3);
+    if (column + secondCell + 2 > width) {
+        KV(first, value, color); KV(second, other, otherColor ? otherColor : color); return;
+    }
+    out() << L"  " << Lbl() << PadRight(std::wstring(first) + L" ", kLabel) << Rst()
+          << (color ? color : Wht()) << value << Rst() << std::wstring(column - cell, L' ')
+          << Lbl() << PadRight(std::wstring(second) + L" ", kLabel) << Rst()
+          << (otherColor ? otherColor : color ? color : Wht()) << other << Rst() << L"\n";
+}
+
 void Flag(const wchar_t* label, bool on) {
     KV(label, on ? L"ENABLED" : L"DISABLED", on ? Grn() : Red());
 }
@@ -124,6 +130,18 @@ void Flag(const wchar_t* label, bool on) {
 void Flag(const wchar_t* label, bool on, Status status) {
     if (status == Status::Success) Flag(label, on);
     else KV(label, L"Unknown (" + std::wstring(ToW(status)) + L")", Yel());
+}
+
+void FlagPair(const wchar_t* first, bool enabled, Status status,
+              const wchar_t* second, bool otherEnabled, Status otherStatus) {
+    auto text = [](bool on, Status known) {
+        return known == Status::Success ? std::wstring(on ? L"ENABLED" : L"DISABLED")
+            : L"Unknown (" + std::wstring(ToW(known)) + L")";
+    };
+    // Keep an explicit status word; color is supplementary and never the only signal.
+    Pair(first, text(enabled, status), second, text(otherEnabled, otherStatus),
+        status != Status::Success ? Yel() : enabled ? Grn() : Red(),
+        otherStatus != Status::Success ? Yel() : otherEnabled ? Grn() : Red());
 }
 
 std::wstring UpdateTypes(const WindowsUpdateItem& item) {
@@ -188,10 +206,8 @@ void RenderConsole(const AssessmentResult& r) {
     // ------------------------------------------------------------ System
     Section(L"System");
     KV(L"OS", r.os.productName + L" (" + r.os.displayVersion + L")");
-    KV(L"Build", Num(r.os.build) + L"." + Num(r.os.ubr), Cyn());
-    KV(L"Architecture", r.os.architecture, Cyn());
-    KV(L"Computer", r.os.computerName);
-    KV(L"User", r.os.userName);
+    Pair(L"Build", Num(r.os.build) + L"." + Num(r.os.ubr), L"Architecture", r.os.architecture, Cyn());
+    Pair(L"Computer", r.os.computerName, L"User", r.os.userName);
     KV(L"CPU", r.cpu.brand);
     KV(L"Cores / Logical", Num(r.cpu.physicalCores) + L" / " + Num(r.cpu.logicalProcessors), Cyn());
     KV(L"RAM", FormatBytes(r.memory.totalBytes) + L"   (available " +
@@ -200,8 +216,7 @@ void RenderConsole(const AssessmentResult& r) {
        r.security.isElevated ? Grn() : Yel());
     KV(L"Uptime", Num(r.os.uptimeSeconds / 3600) + L"h " +
                       Num((r.os.uptimeSeconds % 3600) / 60) + L"m", Cyn());
-    KV(L"Timezone", r.os.timeZone);
-    KV(L"Locale", r.os.locale);
+    Pair(L"Timezone", r.os.timeZone, L"Locale", r.os.locale);
 
     // ------------------------------------------------------------ Hardware security
     Section(L"Hardware Security");
@@ -226,9 +241,9 @@ void RenderConsole(const AssessmentResult& r) {
         const bool virt = CpuVirtualizationAvailable(r.cpu);
         KV(L"Virtualization", virt ? L"Supported" : L"Unsupported", virt ? Grn() : Red());
     }
-    Flag(L"VBS", r.security.virt.vbsEnabled, r.security.virt.status);
     const Status runningStatus = r.security.virt.runningServicesKnown ? Status::Success : Status::Unavailable;
-    Flag(L"HVCI", r.security.virt.hvciEnabled, runningStatus);
+    FlagPair(L"VBS", r.security.virt.vbsEnabled, r.security.virt.status,
+             L"HVCI", r.security.virt.hvciEnabled, runningStatus);
     Flag(L"Credential Guard", r.security.virt.credentialGuardRunning, runningStatus);
     if (r.security.virt.hvciConfigured != Tri::Unknown)
         KV(L"HVCI configured", ToW(r.security.virt.hvciConfigured), Yel());
@@ -241,17 +256,14 @@ void RenderConsole(const AssessmentResult& r) {
             ? (r.defender.enabled ? L"Enabled" : L"Inactive") : L"Unknown", Dim());
         if (!r.defender.amRunningMode.empty()) KV(L"Running mode", r.defender.amRunningMode);
     } else {
-        auto defenderFlag = [&](const wchar_t* label, bool value, Status status) {
-            Flag(label, value, r.defender.status == Status::Success ? status : r.defender.status);
-        };
-        defenderFlag(L"Defender", r.defender.enabled, r.defender.enabledStatus);
-        defenderFlag(L"Real-Time", r.defender.realTimeProtection, r.defender.realTimeProtectionStatus);
-        defenderFlag(L"Behavior Monitoring", r.defender.behaviorMonitor, r.defender.behaviorMonitorStatus);
-        defenderFlag(L"Download scanning", r.defender.ioav, r.defender.ioavStatus);
-        defenderFlag(L"Cloud Protection", r.defender.cloudProtection, r.defender.cloudProtectionStatus);
-        defenderFlag(L"Tamper Protection", r.defender.tamperProtection, r.defender.tamperProtectionStatus);
-        KV(L"Engine Version", r.defender.amEngineVersion, Cyn());
-        KV(L"Signatures Version", r.defender.antivirusSignatureVersion, Cyn());
+        auto known = [&](Status status) { return r.defender.status == Status::Success ? status : r.defender.status; };
+        FlagPair(L"Defender", r.defender.enabled, known(r.defender.enabledStatus),
+                 L"Real-Time", r.defender.realTimeProtection, known(r.defender.realTimeProtectionStatus));
+        FlagPair(L"Behavior Monitoring", r.defender.behaviorMonitor, known(r.defender.behaviorMonitorStatus),
+                 L"Download scanning", r.defender.ioav, known(r.defender.ioavStatus));
+        FlagPair(L"Cloud Protection", r.defender.cloudProtection, known(r.defender.cloudProtectionStatus),
+                 L"Tamper Protection", r.defender.tamperProtection, known(r.defender.tamperProtectionStatus));
+        Pair(L"Engine Version", r.defender.amEngineVersion, L"Signatures Version", r.defender.antivirusSignatureVersion, Cyn());
     }
     if (HasThirdPartyAntivirus(r.antivirus)) {
         const Tri periodic = r.defender.periodicScanning;
@@ -338,48 +350,63 @@ void RenderConsole(const AssessmentResult& r) {
 
     // ------------------------------------------------------------ Storage
     Section(L"Storage");
-    SubHeader(L"Volumes", L"", Dim());
-    for (auto& v : r.storage.volumes) {
-        const std::wstring freeTxt = FormatBytes(v.freeBytes);
-        const std::wstring totalTxt = FormatBytes(v.totalBytes);
-        const size_t sizeCol = 28;                                   // keeps the usage bars aligned
-        const size_t shown = 6 + freeTxt.size() + 3 + totalTxt.size(); // " Free " + a + " / " + b
-        out() << L"  " << Bold() << Blu() << PadRight(v.mountPoint, 5) << Rst()
-              << Lbl() << PadRight(v.filesystem, 6) << Rst()
-              << L" Free " << Cyn() << freeTxt << Rst()
-              << L" / " << Cyn() << totalTxt << Rst()
-              << std::wstring(sizeCol > shown ? sizeCol - shown : 0, L' ');
-        if (v.totalBytes > 0) {
-            const unsigned long long freeB = v.freeBytes > v.totalBytes ? v.totalBytes : v.freeBytes;
-            const double used = static_cast<double>(v.totalBytes - freeB) /
-                                static_cast<double>(v.totalBytes);
-            const wchar_t* c = used < 0.75 ? Grn() : (used < 0.90 ? Yel() : Red());
-            out() << L"  " << Bar(used, 20, c) << L" "
-                  << PadLeft(Num(static_cast<unsigned>(used * 100.0 + 0.5)), 3) << L"% used";
+    auto renderVolume = [&](const StorageVolume& v, bool last) {
+        const std::wstring indent = last ? L"     " : L"  " + std::wstring(GBranch());
+        out() << L"  " << Dim() << (last ? GCorner() : GTee()) << L" " << Bold() << Blu()
+              << v.mountPoint << Rst();
+        if (!v.volumeLabel.empty()) out() << Wht() << L"  " << v.volumeLabel << Rst();
+        out() << Dim() << L"  " << v.filesystem << L"  |  Free " << Cyn() << FormatBytes(v.freeBytes)
+              << Dim() << L" / " << Cyn() << FormatBytes(v.totalBytes) << Rst();
+        if (v.totalBytes) {
+            const auto free = (std::min)(v.freeBytes, v.totalBytes);
+            const double used = static_cast<double>(v.totalBytes - free) / static_cast<double>(v.totalBytes);
+            const auto color = used < .75 ? Grn() : used < .90 ? Yel() : Red();
+            out() << L"  " << Bar(used, 10, color) << L" " << Num(static_cast<unsigned>(used * 100 + .5)) << L"% used";
+        }
+        out() << L"\n" << Dim() << indent << L"BitLocker "
+              << (v.bitLockerState == L"On" ? Grn() : v.bitLockerState == L"Off" ? Red() : Yel())
+              << v.bitLockerState << Rst();
+        if (!v.encryptionMethod.empty()) out() << Dim() << L"  |  Encryption " << Cyn() << v.encryptionMethod << Rst();
+        if (v.diskIndices.size() > 1) {
+            out() << Dim() << L"  |  Spans ";
+            for (size_t i = 0; i < v.diskIndices.size(); ++i)
+                out() << (i ? L", " : L"") << Blu() << L"Disk" << v.diskIndices[i] << Rst();
         }
         out() << L"\n";
-
-        const wchar_t* blc = v.bitLockerState == L"On" ? Grn()
-                           : (v.bitLockerState == L"Off" ? Red() : Yel());
-        out() << L"        " << Lbl() << PadRight(L"BitLocker", 12) << Rst()
-              << blc << v.bitLockerState << Rst() << L"\n";
-        if (!v.encryptionMethod.empty())
-            out() << L"        " << Lbl() << PadRight(L"Encryption", 12) << Rst()
-                  << Cyn() << v.encryptionMethod << Rst() << L"\n";
         if (v.bitLockerState == L"Unknown" && !v.bitLockerNote.empty())
-            out() << L"        " << Lbl() << PadRight(L"Note", 12) << Rst()
-                  << Yel() << v.bitLockerNote << Rst() << L"\n";
+            out() << Dim() << indent << L"Note: " << Yel() << v.bitLockerNote << Rst() << L"\n";
+        if (v.diskIndices.empty())
+            out() << Dim() << indent << L"Disk mapping: " << Yel() << ToW(v.diskMappingStatus) << Rst() << L"\n";
+    };
+    std::vector<unsigned> indices;
+    for (const auto& disk : r.storage.disks) indices.push_back(disk.index);
+    for (const auto& volume : r.storage.volumes)
+        indices.insert(indices.end(), volume.diskIndices.begin(), volume.diskIndices.end());
+    std::sort(indices.begin(), indices.end());
+    indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
+    for (const auto index : indices) {
+        const auto found = std::find_if(r.storage.disks.begin(), r.storage.disks.end(),
+            [&](const auto& disk) { return disk.index == index; });
+        out() << L"  " << Bold() << Blu() << L"Disk" << index << Rst();
+        if (found != r.storage.disks.end()) {
+            const auto& d = *found;
+            out() << L"  " << Wht() << (d.vendor.empty() ? d.model : d.vendor + L" " + d.model)
+                  << Dim() << L"  |  " << Cyn() << FormatBytes(d.sizeBytes)
+                  << Dim() << L"  |  " << Cyn() << d.busType << Dim() << L"  " << d.mediaType << Rst();
+        } else out() << Yel() << L"  Details unavailable" << Rst();
+        out() << L"\n";
+        std::vector<const StorageVolume*> volumes;
+        for (const auto& volume : r.storage.volumes)
+            if (std::find(volume.diskIndices.begin(), volume.diskIndices.end(), index) != volume.diskIndices.end())
+                volumes.push_back(&volume);
+        for (size_t i = 0; i < volumes.size(); ++i) renderVolume(*volumes[i], i + 1 == volumes.size());
+        if (volumes.empty()) out() << L"    " << Dim() << L"No mounted volumes" << Rst() << L"\n";
     }
-
-    SubHeader(L"Physical Disks", L"", Dim());
-    for (auto& d : r.storage.disks) {
-        const std::wstring name = d.vendor.empty() ? d.model : d.vendor + L" " + d.model;
-        out() << L"  " << Bold() << Blu() << PadRight(L"Disk" + Num(d.index), 7) << Rst()
-              << Wht() << PadRight(name, 26) << Rst()
-              << Cyn() << PadLeft(FormatBytes(d.sizeBytes), 9) << Rst() << L"   "
-              << Cyn() << PadRight(d.busType, 7) << Rst()
-              << Lbl() << d.mediaType << Rst() << L"\n";
-    }
+    std::vector<const StorageVolume*> unmapped;
+    for (const auto& volume : r.storage.volumes) if (volume.diskIndices.empty()) unmapped.push_back(&volume);
+    if (!unmapped.empty()) SubHeader(L"Unmapped volumes", L"", Yel());
+    for (size_t i = 0; i < unmapped.size(); ++i) renderVolume(*unmapped[i], i + 1 == unmapped.size());
+    if (indices.empty() && unmapped.empty()) KV(L"Storage query", ToW(r.storage.status), Yel());
 
     // ------------------------------------------------------------ Applications
     Section(L"Applications");
@@ -442,8 +469,22 @@ void RenderConsole(const AssessmentResult& r) {
 
     // ------------------------------------------------------------ Privacy
     Section(L"Privacy (informational)");
-    for (auto& p : r.privacyFindings)
-        KV(p.name.c_str(), p.value, Cyn());
+    std::vector<std::wstring> privacyGroups;
+    for (const auto& finding : r.privacyFindings)
+        if (std::find(privacyGroups.begin(), privacyGroups.end(), finding.group) == privacyGroups.end())
+            privacyGroups.push_back(finding.group);
+    for (const auto& group : privacyGroups) {
+        if (!group.empty()) SubHeader(group, L"", Dim());
+        for (const auto& finding : r.privacyFindings) {
+            if (finding.group != group) continue;
+            out() << L"    " << Lbl() << PadRight(finding.name + L" ", 29) << Rst()
+                  << (finding.status == Status::Success ? Cyn() : finding.status == Status::NotFound ? Dim() : Yel())
+                  << finding.value << Rst();
+            if (!finding.scope.empty()) out() << Dim() << L"  [" << finding.scope << L"]" << Rst();
+            out() << L"\n";
+        }
+    }
+    KV(L"Permission scope", L"Defaults only; per-app overrides and desktop-app exceptions can apply.", Dim());
 
     // ------------------------------------------------------------ Score
     out() << L"\n";
@@ -452,7 +493,7 @@ void RenderConsole(const AssessmentResult& r) {
         const double frac = r.score.maximum > 0
             ? static_cast<double>(r.score.total) / static_cast<double>(r.score.maximum) : 0.0;
         const wchar_t* c = frac >= 0.80 ? Grn() : (frac >= 0.50 ? Yel() : Red());
-        out() << L"\n      " << Bold() << c << r.score.total << Rst()
+        out() << L"  " << Bold() << c << r.score.total << Rst()
               << Lbl() << L" / " << r.score.maximum << Rst() << L"     "
               << Bar(frac, 28, c) << L"  " << c
               << static_cast<unsigned>(frac * 100.0 + 0.5) << L"%" << Rst() << L"\n";

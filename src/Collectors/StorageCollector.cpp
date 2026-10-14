@@ -122,6 +122,47 @@ static void CollectPhysicalDisks(StorageInfo& s) {
     }
 }
 
+static void CollectVolumeDisks(StorageVolume& volume) {
+    std::wstring device = volume.volumeId;
+    if (!device.empty() && device.back() == L'\\') device.pop_back();
+    WinHandle handle(::CreateFileW(device.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr, OPEN_EXISTING, 0, nullptr));
+    if (!handle.valid()) {
+        volume.diskMappingStatus = StatusFromWin32(::GetLastError());
+        return;
+    }
+    std::vector<BYTE> buffer(sizeof(VOLUME_DISK_EXTENTS));
+    // Extents can change while a removable/spanned volume is being queried.
+    for (unsigned attempt = 0; attempt < 8; ++attempt) {
+        DWORD returned = 0;
+        const BOOL ok = ::DeviceIoControl(handle.get(), IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+            nullptr, 0, buffer.data(), static_cast<DWORD>(buffer.size()), &returned, nullptr);
+        const DWORD error = ok ? ERROR_SUCCESS : ::GetLastError();
+        if (!ok && error != ERROR_MORE_DATA) {
+            volume.diskMappingStatus = StatusFromWin32(error);
+            return;
+        }
+        constexpr size_t offset = offsetof(VOLUME_DISK_EXTENTS, Extents);
+        if (returned < offset || returned > buffer.size()) break;
+        const auto* extents = reinterpret_cast<const VOLUME_DISK_EXTENTS*>(buffer.data());
+        const DWORD count = extents->NumberOfDiskExtents;
+        if (!count || count > ((1u << 20) - offset) / sizeof(DISK_EXTENT)) break;
+        const size_t required = offset + static_cast<size_t>(count) * sizeof(DISK_EXTENT);
+        if (!ok) {
+            buffer.resize((std::max)(required, buffer.size() * 2));
+            if (buffer.size() > (1u << 20)) break;
+            continue;
+        }
+        if (required > returned) break;
+        for (DWORD i = 0; i < count; ++i) volume.diskIndices.push_back(extents->Extents[i].DiskNumber);
+        std::sort(volume.diskIndices.begin(), volume.diskIndices.end());
+        volume.diskIndices.erase(std::unique(volume.diskIndices.begin(), volume.diskIndices.end()), volume.diskIndices.end());
+        volume.diskMappingStatus = Status::Success;
+        return;
+    }
+    volume.diskMappingStatus = Status::Error;
+}
+
 static Status CollectVolumes(StorageInfo& s) {
     // Don't pop "no disk in drive" dialogs for empty removable/optical drives.
     struct ErrorModeGuard {
@@ -150,10 +191,15 @@ static Status CollectVolumes(StorageInfo& s) {
         }
         if (!gotPaths) status = StatusFromWin32(::GetLastError());
         if (gotPaths && paths[0]) {
+            StorageVolume mapping;
+            mapping.volumeId = volName;
+            CollectVolumeDisks(mapping);
             for (wchar_t* p = paths.data(); *p; p += wcslen(p) + 1) {
                 StorageVolume v;
                 v.volumeId = volName;
                 v.mountPoint = p;
+                v.diskIndices = mapping.diskIndices;
+                v.diskMappingStatus = mapping.diskMappingStatus;
 
                 wchar_t fsName[MAX_PATH]{};
                 wchar_t volLabel[MAX_PATH]{};     // local, avoids the `label` macro issue

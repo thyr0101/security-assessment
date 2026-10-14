@@ -47,11 +47,11 @@ A read only app built on C++ extracting all the security information from your c
 
 # Usage 
 
-- Open a command prompt window, elevated or not¹
+- Open a command prompt window, elevated or notÃƒâ€šÃ‚Â¹
 
 - Run the binary
 
-¹ If not elevated, the app is unable to load all information.
+Ãƒâ€šÃ‚Â¹ If not elevated, the app is unable to load all information.
 
 ## Build
 
@@ -132,3 +132,17 @@ python tests/smoke.py build-tests/Release
 The native tests use temporary files and a private volatile registry key, which they remove afterward, plus an in-memory WMI object. They require local WMI access. The optional smoke harness uses only Python's standard library to parse reports and check the CLI; Python is not an application dependency.
 
 See [REVIEW.md](REVIEW.md) for the fixes, compatibility notes, and validation scope.
+
+## Compact console layout and storage mapping
+
+The console uses short headings, paired facts when the terminal is wide enough, and nested storage trees. Values are never truncated; narrow consoles fall back to separate fact rows. Each mounted volume appears beneath its physical disk, using [IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-ioctl_volume_get_volume_disk_extents). Spanned volumes appear beneath every referenced disk with an explicit span annotation. Unmapped volumes remain visible with a mapping status, and missing disk descriptors do not hide mapped volumes. JSON retains its disk and volume arrays and adds volume GUIDs, disk numbers, and mapping statuses.
+
+No pictographic icons are added: console font coverage and Unicode hardware symbols are inconsistent. Tree characters, restrained colors, and aligned labels provide the visual structure. Redirected output and `NO_COLOR` use plain ASCII structure.
+
+## Privacy configuration
+
+Privacy collection uses native registry reads; replacing these with undocumented NT entry points would not provide a more authoritative view of configuration. The report includes diagnostic policy, advertising ID, personalization, online speech consent, typing/inking policy, app permission defaults, clipboard history and sync preferences/policies, Remote Assistance, activity publishing, and named Delivery Optimization modes. Known policy restrictions take precedence over preferences where applicable. Missing settings are shown as **Not configured**, rather than assumed enabled or disabled; read failures remain **Unknown**.
+
+Every entry identifies its scope. App permissions describe defaults, not active access: individual app overrides, desktop-app exceptions, Windows edition/version support, and other restrictions can affect actual behavior. Clipboard policy permission does not prove that sync is active, and stored speech consent does not override device restrictions. Expanded JSON privacy entries include status, scope, and group alongside their existing fields. Privacy remains informational and does not change the 1000-point score.
+
+Policy mappings follow Microsoft's [Privacy policy reference](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-privacy) and [System policy reference](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-system), together with Windows' installed ADMX definitions.

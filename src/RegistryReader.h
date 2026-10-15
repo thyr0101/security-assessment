@@ -22,9 +22,6 @@ public:
     // Count immediate values.
     Status CountValues(DWORD& out) const;
 
-    HKEY get() const noexcept { return key_.get(); }
-    bool valid() const noexcept { return key_.valid(); }
-
 private:
     RegKey key_;
 };

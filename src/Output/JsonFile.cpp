@@ -7,7 +7,7 @@
 #include <wrl/wrappers/corewrappers.h>
 #include <algorithm>
 #include <cmath>
-#include <format>
+#include <cwchar>
 
 #pragma comment(lib, "runtimeobject.lib")
 
@@ -22,8 +22,12 @@ std::unexpected<std::wstring> Error(std::wstring text) { return std::unexpected(
 std::filesystem::path DefaultName() {
     SYSTEMTIME now{};
     ::GetLocalTime(&now);
-    return std::format(L"security-assessment-{:04}{:02}{:02}-{:02}{:02}{:02}-{:03}-{}.json",
-        now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond, now.wMilliseconds, ::GetCurrentProcessId());
+    wchar_t name[96]{};
+    swprintf_s(name, L"security-assessment-%04u%02u%02u-%02u%02u%02u-%03u-%lu.json",
+        static_cast<unsigned>(now.wYear), static_cast<unsigned>(now.wMonth), static_cast<unsigned>(now.wDay),
+        static_cast<unsigned>(now.wHour), static_cast<unsigned>(now.wMinute), static_cast<unsigned>(now.wSecond),
+        static_cast<unsigned>(now.wMilliseconds), ::GetCurrentProcessId());
+    return name;
 }
 bool ReportShape(ABI::Windows::Data::Json::IJsonObject* root) {
     using namespace ABI::Windows::Data::Json;

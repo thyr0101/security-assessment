@@ -1,4 +1,5 @@
 #include "WindowsUpdateCollector.h"
+#include "../ComHelpers.h"
 #include "PersistenceCollector.h"
 #include <wuapi.h>
 #include <comdef.h>
@@ -13,26 +14,6 @@
 namespace sa {
 namespace {
 using Microsoft::WRL::ComPtr;
-
-struct Bstr {
-    BSTR value = nullptr;
-    ~Bstr() { ::SysFreeString(value); }
-    Bstr() = default;
-    Bstr(const Bstr&) = delete;
-    Bstr& operator=(const Bstr&) = delete;
-    std::wstring str() const { return value ? std::wstring(value, ::SysStringLen(value)) : std::wstring{}; }
-};
-
-Status ComStatus(HRESULT hr) {
-    return hr == E_ACCESSDENIED || hr == HRESULT_FROM_WIN32(ERROR_ACCESS_DENIED)
-        ? Status::AccessDenied : Status::Unavailable;
-}
-
-std::wstring ErrorCode(HRESULT hr) {
-    wchar_t code[16]{};
-    swprintf_s(code, L"0x%08X", static_cast<unsigned>(hr));
-    return code;
-}
 
 void PendingFailure(WindowsUpdateInfo& info, HRESULT hr, const wchar_t* operation) {
     if (SUCCEEDED(hr)) hr = E_UNEXPECTED;
@@ -207,18 +188,14 @@ WindowsUpdateInfo CollectWindowsUpdateInfo() {
     ComPtr<IUpdateSession> session;
     HRESULT hr = ::CoCreateInstance(__uuidof(UpdateSession), nullptr, CLSCTX_INPROC_SERVER,
         __uuidof(IUpdateSession), reinterpret_cast<void**>(session.GetAddressOf()));
-    if (FAILED(hr) || !session) { PendingFailure(info, hr, L"Windows Update Agent connection"); info.status = info.pendingStatus; return info; }
+    if (FAILED(hr) || !session) { PendingFailure(info, hr, L"Windows Update Agent connection"); return info; }
     _bstr_t client(L"SecurityAssessment");
     (void)session->put_ClientApplicationID(client);
     ComPtr<IUpdateSearcher> searcher;
     hr = session->CreateUpdateSearcher(searcher.GetAddressOf());
-    if (FAILED(hr) || !searcher) { PendingFailure(info, hr, L"Windows Update Agent searcher"); info.status = info.pendingStatus; return info; }
+    if (FAILED(hr) || !searcher) { PendingFailure(info, hr, L"Windows Update Agent searcher"); return info; }
     ReadHistory(searcher.Get(), info);
     ReadPending(searcher.Get(), info);
-    info.status = info.pendingStatus;
-    if (info.status == Status::Success && (info.services.status != Status::Success ||
-        info.rebootRequired == Tri::Unknown || info.historyStatus == Status::Unavailable || info.historyStatus == Status::AccessDenied))
-        info.status = Status::Unavailable;
     return info;
 }
 } // namespace sa

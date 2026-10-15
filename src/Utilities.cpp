@@ -2,6 +2,8 @@
 #include <vector>
 #include <cwctype>
 #include <limits>
+#include <sstream>
+#include <iomanip>
 
 namespace sa {
 

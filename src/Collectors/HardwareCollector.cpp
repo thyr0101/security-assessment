@@ -88,12 +88,7 @@ MemoryInfo CollectMemoryInfo() {
     if (::GlobalMemoryStatusEx(&ms)) {
         m.totalBytes     = ms.ullTotalPhys;
         m.availableBytes = ms.ullAvailPhys;
-    } else {
-        m.status = Status::Error;
-        return m;
     }
-
-    m.status = Status::Success;
     return m;
 }
 

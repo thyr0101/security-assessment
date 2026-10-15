@@ -1,4 +1,5 @@
 #include "AntivirusCollector.h"
+#include "../ComHelpers.h"
 #include <iwscapi.h>
 #include <wscapi.h>
 #include <wrl/client.h>
@@ -13,24 +14,9 @@ namespace sa {
 namespace {
 using Microsoft::WRL::ComPtr;
 
-struct Bstr {
-    BSTR value = nullptr;
-    ~Bstr() { ::SysFreeString(value); }
-    Bstr() = default;
-    Bstr(const Bstr&) = delete;
-    Bstr& operator=(const Bstr&) = delete;
-    std::wstring str() const { return value ? std::wstring(value, ::SysStringLen(value)) : std::wstring{}; }
-};
-
-Status ComStatus(HRESULT hr) {
-    return hr == E_ACCESSDENIED ? Status::AccessDenied : Status::Unavailable;
-}
-
 void Failure(AntivirusInfo& info, HRESULT hr, const wchar_t* operation) {
     info.status = ComStatus(hr);
-    wchar_t code[16]{};
-    swprintf_s(code, L"0x%08X", static_cast<unsigned>(hr));
-    info.reason = std::wstring(operation) + L" failed (" + code + L").";
+    info.reason = std::wstring(operation) + L" failed (" + ErrorCode(hr) + L").";
 }
 
 bool IsDefender(const std::wstring& id, const std::wstring& name, const std::wstring& remediation) {

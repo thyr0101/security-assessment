@@ -3,14 +3,12 @@
 #include <io.h>
 #include <iostream>
 #include <string>
-#include <chrono>
-#include <syncstream>
 #include <array>
 #include <atomic>
-#include <functional>
 #include <thread>
 #include <optional>
 #include "Common.h"
+#include "CollectionTimer.h"
 #include "Utilities.h"
 #include "Collectors/SystemCollector.h"
 #include "Collectors/HardwareCollector.h"
@@ -29,27 +27,6 @@
 #include "Output/JsonFile.h"
 
 using namespace sa;
-
-namespace {
-class CollectionTimer {
-    const wchar_t* label_;
-    std::chrono::steady_clock::time_point start_ = std::chrono::steady_clock::now();
-public:
-    explicit CollectionTimer(const wchar_t* label) : label_(label) {}
-    ~CollectionTimer() {
-        wchar_t enabled[2]{};
-        if (::GetEnvironmentVariableW(L"SA_TRACE_TIMINGS", enabled, _countof(enabled)))
-            std::wosyncstream(std::wcerr) << L"[timing] " << label_ << L": "
-                << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start_).count()
-                << L" ms\n";
-    }
-};
-template<class Function>
-auto Timed(const wchar_t* label, Function&& function) {
-    CollectionTimer timer(label);
-    return std::forward<Function>(function)();
-}
-}
 
 int wmain(int argc, wchar_t** argv) {
     struct ConsoleCodePage {
@@ -134,69 +111,70 @@ int wmain(int argc, wchar_t** argv) {
     // Independent collectors write distinct result fields. Four COM-initialized
     // workers overlap provider waits while keeping output and scoring deterministic.
     // Start the slow update/antivirus providers first to reduce the final wait.
-    const auto tasks = std::to_array<std::function<void()>>({
-        [&] {
+    using CollectorTask = void (*)(AssessmentResult&);
+    constexpr CollectorTask tasks[] = {
+        [](AssessmentResult& r) {
             try { r.windowsUpdate = Timed(L"windowsUpdate", [&] { return CollectWindowsUpdateInfo(); }); }
-            catch (...) { r.windowsUpdate.status = r.windowsUpdate.pendingStatus = Status::Error;
+            catch (...) { r.windowsUpdate.pendingStatus = Status::Error;
                               r.windowsUpdate.pendingReason = L"Windows Update collection failed."; }
         },
-        [&] {
+        [](AssessmentResult& r) {
             try { r.antivirus = Timed(L"antivirus", [&] { return CollectAntivirusInfo(); }); }
             catch (...) { r.antivirus.status = Status::Error; }
             try { r.defender = Timed(L"defender", [&] { return CollectDefenderInfo(HasThirdPartyAntivirus(r.antivirus)); }); }
             catch (...) { r.defender.status = Status::Error; }
         },
-        [&] {
+        [](AssessmentResult& r) {
             try { r.os = Timed(L"os", [&] { return CollectOsInfo(); }); }
             catch (...) { r.os.status = Status::Error; }
         },
-        [&] {
+        [](AssessmentResult& r) {
             try { r.cpu = Timed(L"cpu", [&] { return CollectCpuInfo(); }); }
             catch (...) { r.cpu.status = Status::Error; }
         },
-        [&] {
+        [](AssessmentResult& r) {
             try { r.memory = Timed(L"memory", [&] { return CollectMemoryInfo(); }); }
-            catch (...) { r.memory.status = Status::Error; }
+            catch (...) {}
         },
-        [&] {
+        [](AssessmentResult& r) {
             try { r.security = Timed(L"security", [&] { return CollectSecurityInfo(); }); }
             catch (...) { r.security.tpm.status = Status::Error; }
         },
-        [&] {
+        [](AssessmentResult& r) {
             try { r.firewall = Timed(L"firewall", [&] { return CollectFirewallInfo(); }); }
             catch (...) { r.firewall.status = Status::Error; }
         },
-        [&] {
+        [](AssessmentResult& r) {
             try { r.storage = Timed(L"storage", [&] { return CollectStorageInfo(); }); }
             catch (...) { r.storage.status = Status::Error; }
         },
-        [&] {
+        [](AssessmentResult& r) {
             try { r.network = Timed(L"network", [&] { return CollectNetworkInfo(); }); }
             catch (...) { r.network.status = Status::Error; }
         },
-        [&] {
+        [](AssessmentResult& r) {
             try { r.hardening = Timed(L"hardening", [&] { return CollectHardeningInfo(); }); }
             catch (...) {}
         },
-        [&] {
+        [](AssessmentResult& r) {
             try { r.registryFindings = Timed(L"registryFindings", [&] { return RunRegistryScans(DefaultRegistryScans()); }); }
             catch (...) {}
         },
-        [&] {
+        [](AssessmentResult& r) {
             try { r.directoryFindings = Timed(L"directoryFindings", [&] { return RunDirectoryScans(DefaultDirectoryScans()); }); }
             catch (...) {}
         },
-        [&] {
+        [](AssessmentResult& r) {
             try { r.persistence = Timed(L"persistence", [&] { return CollectPersistence(); }); }
             catch (...) {}
         }
-    });
+    };
     {
         std::atomic_size_t next{0};
         auto work = [&] {
             ComInit workerCom;
-            for (size_t index; (index = next.fetch_add(1, std::memory_order_relaxed)) < tasks.size();)
-                tasks[index]();
+            for (size_t index; (index = next.fetch_add(1, std::memory_order_relaxed)) < std::size(tasks);)
+                tasks[index](r);
         };
         std::array<std::jthread, 3> workers;
         try {

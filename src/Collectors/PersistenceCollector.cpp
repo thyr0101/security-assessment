@@ -151,15 +151,13 @@ static std::wstring StartName(DWORD s) {
 ServiceReport CollectServices(const std::vector<std::wstring>& names) {
     ServiceReport rep;
     ServiceHandle scm(::OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT));
-    if (!scm) { rep.status = StatusFromWin32(::GetLastError()); return rep; }
-    rep.status = Status::Success;
+    if (!scm) return rep;
     for (const auto& name : names) {
         ServiceEntry e;
         e.name = name;
         ServiceHandle svc(::OpenServiceW(scm.get(), name.c_str(), SERVICE_QUERY_STATUS | SERVICE_QUERY_CONFIG));
         if (!svc) {
             e.status = StatusFromWin32(::GetLastError());
-            if (e.status != Status::NotFound) rep.status = e.status;
             rep.entries.push_back(std::move(e)); continue;
         }
         e.status = Status::Success;
@@ -192,7 +190,6 @@ ServiceReport CollectServices(const std::vector<std::wstring>& names) {
             else e.status = StatusFromWin32(::GetLastError());
         }
         else e.status = sizeRead ? Status::Error : StatusFromWin32(configError);
-        if (e.status != Status::Success) rep.status = e.status;
         rep.entries.push_back(std::move(e));
     }
     return rep;

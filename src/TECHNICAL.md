@@ -33,10 +33,12 @@ All runtime dependencies are Windows components or the C++ runtime. No Python pa
 | `Collectors/PersistenceCollector` | Startup locations and threshold scans. |
 | `RegistryReader`, `WmiHelper`, `Utilities` | Native resource ownership, typed extraction and shared helpers. |
 | `Security/ScoreEngine` | Applies rules, totals weights, and generates ranked warnings. |
-| `Output/ConsoleRenderer`, `JsonRenderer` | Human-readable presentation and UTF-8 JSON serialization. |
+| `Output/ConsoleRenderer`, `JsonRenderer` | Report composition and display snapshot selection. |
+| `Output/ConsoleLayout.h`, `JsonWriter.h` | Reusable box layout, colors, wrapping, JSON escaping and object/array helpers. |
+| `ComHelpers.h`, `CollectionTimer.h` | Shared COM string ownership/error formatting and optional collector tracing. |
 | `Output/JsonFile` | Safe file creation, native JSON validation, and terminal formatting of saved reports. |
 
-Four COM-initialized workers run independent collectors and write distinct result fields. Workers join before scoring and rendering. Provider failures preserve unknown/unavailable states rather than inventing disabled or secure results. Privacy collection and minimum-password-length collection have been removed from the data model, collectors, renderers, and scoring.
+Four COM-initialized workers invoke a fixed array of function pointers and run independent collectors and write distinct result fields. Workers join before scoring and rendering. Provider failures preserve unknown/unavailable states rather than inventing disabled or secure results. Privacy collection and minimum-password-length collection have been removed from the data model, collectors, renderers, and scoring.
 
 ## Windows interfaces
 
@@ -96,9 +98,19 @@ Warnings are omitted and disabled in the backup viewer. Existing version 1 and 2
 
 ## Console and warnings
 
-The console ends with breakdown, score, then warnings. Colors supplement explicit states; redirected output and `NO_COLOR` use plain ASCII structure. Related facts share rows only when full values fit. Hardware pictograms are not used because console font coverage is inconsistent.
+Each report category, the rule breakdown, score and warnings has its own box. Terminal width determines the layout; long content wraps inside the border without truncation. ANSI color sequences do not count toward line width, UTF-16 surrogate pairs stay together, and Windows character classification handles wide/nonspacing characters. Color consoles use Unicode borders; redirected output and `NO_COLOR` use ASCII borders. The backup notice uses the same box helpers with red emphasis.
+
+Console state belongs to each `ConsoleLayout` instance, which also restores the terminal mode. The `.cpp` file composes report sections; the layout header owns formatting helpers. Related facts share rows only when full values fit. Hardware pictograms remain omitted because font coverage varies. The console still ends with breakdown, score, then warnings.
 
 Warnings are ordered Critical, High, Medium, Low and include context and a recommendation. They do not deduct extra points. Unknown, inaccessible, or unconfigured evidence is distinguished from confirmed weaknesses and grouped in a Low-severity verification-gap notice. Recommendations are displayed only; the app does not apply them.
+
+## Box layout and binary size
+
+With the same MSVC v145 Release settings and dynamic CRT, the previous executable was 745,472 bytes (728 KiB). The boxed layout and helper cleanup build is 511,488 bytes (499.5 KiB), a reduction of 233,984 bytes (31.4%). The native Visual Studio project and CMake produce the same executable size. Debug symbols remain in separate PDB files; security linker settings and all checks remain enabled.
+
+The size reduction primarily comes from removing general `std::format` machinery for a fixed filename and a simple string join. Integer display no longer constructs string streams. Collector dispatch uses function pointers instead of type-erased callbacks; disabled tracing avoids clock reads. Unused registry accessors and aggregate statuses were removed, while individual read statuses used by display/scoring remain intact. Shared helpers are in focused headers rather than duplicated in report/collector implementation files.
+
+Release and Debug builds completed, and live/backup output was inspected. Automated tests were not run for this layout change; existing fixtures were updated for the new heading markers.
 
 ## Debugging and regression checks
 
@@ -115,7 +127,7 @@ Optional MSVC `/analyze` and AddressSanitizer builds can check static and memory
 
 In one same-machine comparison, compact exports decreased from 20,063 to 7,188 bytes (64.2%). Every scored rule state, award and weight matched the prior build (772/1000). Export sizes depend on pending updates and visible findings. Warm non-admin smoke exports took about 0.6–0.7 seconds; these individual runs are not a benchmark.
 
-Set `SA_TRACE_TIMINGS=1` to emit per-collector durations to stderr. Prior measured non-admin runs dropped from a 10.994-second profiled baseline to a median of 0.802 seconds over five warm Release JSON runs after avoiding restricted WMI waits and overlapping collectors. Different machines/provider cache states will differ. C++23 typed errors (`std::expected`), owned output pointers (`std::out_ptr`), ranges, joined workers, and bounded topology traversal support safer collection without third-party dependencies.
+Set `SA_TRACE_TIMINGS=1` to emit per-collector durations to stderr. Disabled tracing skips performance-clock reads. Prior measured non-admin runs dropped from a 10.994-second profiled baseline to a median of 0.802 seconds over five warm Release JSON runs after avoiding restricted WMI waits and overlapping collectors. Different machines/provider cache states will differ. C++23 typed errors (`std::expected`), owned output pointers (`std::out_ptr`), ranges, joined workers, and bounded topology traversal support safer collection without third-party dependencies.
 
 ## Local archive
 

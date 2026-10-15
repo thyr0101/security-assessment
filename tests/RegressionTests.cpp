@@ -91,7 +91,7 @@ static const ScoreRuleResult& Rule(const ScoreReport& score, const std::string& 
 
 static WindowsUpdateInfo HealthyWindowsUpdate() {
     WindowsUpdateInfo update;
-    update.status = update.pendingStatus = update.historyStatus = update.services.status = Status::Success;
+    update.pendingStatus = update.historyStatus = Status::Success;
     update.rebootRequired = Tri::No;
     update.lastInstallationSucceeded = Tri::Yes;
     for (const auto* name : {L"wuauserv", L"BITS", L"UsoSvc"}) {
@@ -502,7 +502,7 @@ static void TestHardeningAndWarnings() {
     result.network.adapters.push_back(NetworkAdapterInfo{});
     result.score = ComputeScore(result);
     const auto console = CaptureConsole(result);
-    Check(console.find(L"Rule breakdown") < console.find(L"SECURITY SCORE") && console.find(L"SECURITY SCORE") < console.find(L"-- Warnings"),
+    Check(console.find(L"Rule breakdown") < console.find(L"SECURITY SCORE") && console.find(L"SECURITY SCORE") < console.find(L"+- Warnings"),
           "report ends with breakdown, score, then warnings");
     for (const auto* hidden : {L"Active Network Adapters", L"Local TCP Listeners", L"UDP Port 69", L"Configured RDP port", L"RDP scope"})
         Check(console.find(hidden) == std::wstring::npos, "removed console inventories stay hidden");
@@ -585,14 +585,14 @@ static void TestJsonFiles(Fixture& fixture) {
     const auto live = CaptureConsole(result);
     const auto banner = console.find(L"Windows Security Assessment");
     const auto warning = console.find(L"[!] BACKUP REPORT");
-    const auto system = console.find(L"-- System");
+    const auto system = console.find(L"+- System");
     Check(banner < warning && warning < system, "boxed backup warning appears between title and System");
-    Check(console.find(L"+------------------------------------------------------------+") != std::wstring::npos &&
+    Check(console.find(L"+-----------------------------------------------------------------------------------------------+") != std::wstring::npos &&
           console.find(L"current system state.") != std::wstring::npos, "backup warning has a plain-text box and explains stale data");
     Check(live.find(L"BACKUP REPORT") == std::wstring::npos && console.find(L"-- Applications") == std::wstring::npos,
           "live reports have no backup box and applications are removed");
-    Check(console.substr(system, console.find(L"-- Warnings") - system) ==
-          live.substr(live.find(L"-- System"), live.find(L"-- Warnings") - live.find(L"-- System")),
+    Check(console.substr(system, console.find(L"+- Warnings") - system) ==
+          live.substr(live.find(L"+- System"), live.find(L"+- Warnings") - live.find(L"+- System")),
           "saved report uses the same display as the live report before warnings");
     Check(console.find(L"Warnings are disabled when viewing an export") != std::wstring::npos &&
           console.find(L"verification gap") == std::wstring::npos, "export viewer explicitly disables security warnings");

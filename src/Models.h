@@ -17,20 +17,14 @@ struct OsInfo {
 struct CpuInfo {
     std::wstring brand;
     unsigned logicalProcessors = 0, physicalCores = 0;
-    bool nx = false, aesni = false, virtualizationAvailable = false;
+    bool nx = false, aesni = false;
+    // VMX/SVM support or a running hypervisor (which can mask those CPUID bits).
+    bool virtualizationAvailable = false;
     Status status = Status::Error;
 };
 
-// True when the CPU exposes VMX/SVM, or when a hypervisor is already running.
-// With VBS/Hyper-V active, Windows itself runs on top of the hypervisor and the
-// VMX/SVM bits are masked from CPUID, so the raw bits alone under-report.
-inline bool CpuVirtualizationAvailable(const CpuInfo& c) {
-    return c.virtualizationAvailable;
-}
-
 struct MemoryInfo {
     unsigned long long totalBytes = 0, availableBytes = 0;
-    Status status = Status::Error;
 };
 
 struct TpmInfo {
@@ -255,7 +249,6 @@ struct ServiceEntry {
 
 struct ServiceReport {
     std::vector<ServiceEntry> entries;
-    Status status = Status::Error;
 };
 
 struct WindowsUpdateItem {
@@ -279,7 +272,6 @@ struct WindowsUpdateInfo {
     Tri lastInstallationSucceeded = Tri::Unknown;
     Status historyStatus = Status::Unavailable;
     ServiceReport services;
-    Status status = Status::Unavailable;
 };
 
 struct RegistryScanDefinition {

@@ -1,7 +1,6 @@
 #include "ScoreEngine.h"
 #include <algorithm>
 #include <ranges>
-#include <format>
 #include <string_view>
 
 namespace sa {
@@ -97,7 +96,7 @@ void BuildWarnings(const AssessmentResult& assessment, ScoreReport& report) {
         SecurityWarning warning;
         warning.ruleId = rule.id;
         warning.title = rule.description;
-        warning.detail = std::format("{}: {}", rule.state, rule.reason);
+        warning.detail = rule.state + ": " + rule.reason;
         warning.severity = policy == std::end(policies) ? Severity::Medium : policy->severity;
         warning.recommendation = policy == std::end(policies)
             ? "Review this setting in Windows Security or the applicable device policy."

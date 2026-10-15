@@ -1,253 +1,11 @@
-#include "ConsoleRenderer.h"
-#include "../Utilities.h"
-#include <windows.h>
-#include <iostream>
-#include <sstream>
-#include <string>
-#include <vector>
+#include "ConsoleLayout.h"
 #include <algorithm>
 #include <ranges>
 
-// Presentation only: this file formats values that were already collected and scored.
-// Colors use ANSI escape sequences, enabled only when stdout is a real console that
-// accepts them (and NO_COLOR is not set). Redirected output stays plain text.
-
+// Report composition only. ConsoleLayout owns reusable framing and formatting.
 namespace sa {
 
-namespace {
-
-constexpr size_t kWidth = 62;     // total width of banners / section rules
-constexpr size_t kLabel = 22;     // width of the label column (label + at least one space)
-
-size_t g_width = 100;
-bool g_color = false;             // ANSI colors active?
-
-// ---- palette (empty strings when color is off) ----
-const wchar_t* K(const wchar_t* code) { return g_color ? code : L""; }
-const wchar_t* Rst()  { return K(L"\x1b[0m");  }
-const wchar_t* Bold() { return K(L"\x1b[1m");  }
-const wchar_t* Dim()  { return K(L"\x1b[90m"); }
-const wchar_t* Lbl()  { return K(L"\x1b[37m"); }
-const wchar_t* Red()  { return K(L"\x1b[91m"); }
-const wchar_t* Grn()  { return K(L"\x1b[92m"); }
-const wchar_t* Yel()  { return K(L"\x1b[93m"); }
-const wchar_t* Cyn()  { return K(L"\x1b[96m"); }
-const wchar_t* Blu()  { return K(L"\x1b[94m"); }
-const wchar_t* Wht()  { return K(L"\x1b[97m"); }
-
-// ---- glyphs: Unicode on a color console, ASCII otherwise (safe for log files) ----
-const wchar_t* GHLine()  { return g_color ? L"\u2500" : L"-"; }
-const wchar_t* GFull()   { return g_color ? L"\u2588" : L"#"; }
-const wchar_t* GEmpty()  { return g_color ? L"\u2591" : L"."; }
-const wchar_t* GTee()    { return g_color ? L"\u251C\u2500" : L"|-"; }
-const wchar_t* GCorner() { return g_color ? L"\u2514\u2500" : L"`-"; }
-const wchar_t* GBranch() { return g_color ? L"\u2502  " : L"|  "; }
-const wchar_t* GDot()    { return g_color ? L"\u00B7" : L"."; }
-
-std::wostream& out() { return std::wcout; }
-
-std::wstring Repeat(const wchar_t* s, size_t n) {
-    std::wstring r;
-    for (size_t i = 0; i < n; ++i) r += s;
-    return r;
-}
-
-std::wstring PadRight(const std::wstring& s, size_t w) {
-    return s.size() >= w ? s : s + std::wstring(w - s.size(), L' ');
-}
-std::wstring PadLeft(const std::wstring& s, size_t w) {
-    return s.size() >= w ? s : std::wstring(w - s.size(), L' ') + s;
-}
-
-template <typename T>
-std::wstring Num(T v) {
-    std::wostringstream o;
-    o << v;
-    return o.str();
-}
-
-// Progress bar: `frac` in [0,1].
-std::wstring Bar(double frac, size_t width, const wchar_t* color) {
-    if (frac < 0) frac = 0;
-    if (frac > 1) frac = 1;
-    const size_t filled = static_cast<size_t>(frac * static_cast<double>(width) + 0.5);
-    std::wstring s;
-    s += color;
-    s += Repeat(GFull(), filled);
-    s += Dim();
-    s += Repeat(GEmpty(), width - filled);
-    s += Rst();
-    return s;
-}
-
-// ---- layout helpers ----
-void Banner(const wchar_t* title) {
-    out() << Bold() << Cyn() << title << Rst() << L"\n";
-    out() << Dim() << Repeat(GHLine(), kWidth) << Rst() << L"\n";
-}
-
-// Keep the backup notice between the title and the report, including when
-// redirected. Width follows the terminal, with ASCII borders for plain output.
-void BackupWarning() {
-    const size_t width = (std::min)(kWidth, g_width - 4);
-    const size_t inner = width - 4;
-    const auto vertical = g_color ? L"\u2502" : L"|";
-    auto edge = [&](const wchar_t* left, const wchar_t* right) {
-        out() << L"  " << Bold() << Red() << left << Repeat(GHLine(), width - 2) << right << Rst() << L"\n";
-    };
-    auto row = [&](std::wstring_view text) {
-        out() << L"  " << Bold() << Red() << vertical << L" " << PadRight(std::wstring(text), inner)
-              << L" " << vertical << Rst() << L"\n";
-    };
-    out() << L"\n";
-    edge(g_color ? L"\u250C" : L"+", g_color ? L"\u2510" : L"+");
-    row(L"[!] BACKUP REPORT");
-    row(L"");
-    std::wstring_view message = L"You are viewing a backup. These results do not represent the current system state.";
-    while (!message.empty()) {
-        size_t count = (std::min)(inner, message.size());
-        if (count < message.size()) {
-            const auto space = message.rfind(L' ', count);
-            if (space != std::wstring_view::npos && space) count = space;
-        }
-        row(message.substr(0, count));
-        message.remove_prefix(count);
-        while (!message.empty() && message.front() == L' ') message.remove_prefix(1);
-    }
-    edge(g_color ? L"\u2514" : L"+", g_color ? L"\u2518" : L"+");
-}
-
-void Section(const wchar_t* title) {
-    const std::wstring t = title;
-    const size_t used = 3 + t.size() + 1;
-    out() << L"\n" << Dim() << Repeat(GHLine(), 2) << L" " << Rst()
-          << Bold() << Cyn() << t << Rst()
-          << Dim() << L" " << Repeat(GHLine(), kWidth > used ? kWidth - used : 1) << Rst()
-          << L"\n";
-}
-
-void SubHeader(const std::wstring& title, const std::wstring& right, const wchar_t* rightColor) {
-    out() << L"\n  " << Dim() << L"[+] " << Rst() << Bold() << Wht() << title << Rst();
-    if (!right.empty()) out() << L"  " << rightColor << right << Rst();
-    out() << L"\n";
-}
-
-// Indented facts use a subtle dot; headings and trees show the hierarchy.
-void KV(const wchar_t* label, const std::wstring& value, const wchar_t* color = nullptr) {
-    out() << L"    " << Dim() << GDot() << L" " << Lbl() << PadRight(std::wstring(label) + L" ", kLabel) << Rst()
-          << (color ? color : Wht()) << value << Rst() << L"\n";
-}
-
-// Pair short facts only when their full values fit; never truncate report data.
-void Pair(const wchar_t* first, const std::wstring& value, const wchar_t* second,
-          const std::wstring& other, const wchar_t* color = nullptr, const wchar_t* otherColor = nullptr) {
-    const size_t width = g_width;
-    const size_t cell = (std::max)(kLabel, std::wstring(first).size() + 1) + value.size();
-    const size_t secondCell = (std::max)(kLabel, std::wstring(second).size() + 1) + other.size();
-    const size_t column = (std::max)(size_t{46}, cell + 3);
-    if (column + secondCell + 8 > width) {
-        KV(first, value, color); KV(second, other, otherColor ? otherColor : color); return;
-    }
-    out() << L"    " << Dim() << GDot() << L" " << Lbl() << PadRight(std::wstring(first) + L" ", kLabel) << Rst()
-          << (color ? color : Wht()) << value << Rst() << std::wstring(column - cell, L' ')
-          << Dim() << GDot() << L" " << Lbl() << PadRight(std::wstring(second) + L" ", kLabel) << Rst()
-          << (otherColor ? otherColor : color ? color : Wht()) << other << Rst() << L"\n";
-}
-
-void Paragraph(std::wstring_view text, size_t indent, const wchar_t* color) {
-    const size_t width = g_width > indent + 4 ? g_width - indent - 2 : 32;
-    while (!text.empty()) {
-        size_t count = (std::min)(text.size(), width);
-        if (count < text.size()) {
-            const auto space = text.rfind(L' ', count);
-            if (space != std::wstring_view::npos && space > 0) count = space;
-        }
-        out() << std::wstring(indent, L' ') << color << text.substr(0, count) << Rst() << L"\n";
-        text.remove_prefix(count);
-        while (!text.empty() && text.front() == L' ') text.remove_prefix(1);
-    }
-}
-
-void Flag(const wchar_t* label, bool on) {
-    KV(label, on ? L"ENABLED" : L"DISABLED", on ? Grn() : Red());
-}
-
-void Flag(const wchar_t* label, bool on, Status status) {
-    if (status == Status::Success) Flag(label, on);
-    else KV(label, L"Unknown (" + std::wstring(ToW(status)) + L")", Yel());
-}
-
-void FlagPair(const wchar_t* first, bool enabled, Status status,
-              const wchar_t* second, bool otherEnabled, Status otherStatus) {
-    auto text = [](bool on, Status known) {
-        return known == Status::Success ? std::wstring(on ? L"ENABLED" : L"DISABLED")
-            : L"Unknown (" + std::wstring(ToW(known)) + L")";
-    };
-    // Keep an explicit status word; color is supplementary and never the only signal.
-    Pair(first, text(enabled, status), second, text(otherEnabled, otherStatus),
-        status != Status::Success ? Yel() : enabled ? Grn() : Red(),
-        otherStatus != Status::Success ? Yel() : otherEnabled ? Grn() : Red());
-}
-
-std::wstring UpdateTypes(const WindowsUpdateItem& item) {
-    std::vector<std::wstring> labels;
-    auto add = [&](const std::wstring& label) {
-        if (!label.empty() && std::none_of(labels.begin(), labels.end(), [&](const auto& existing) { return IEquals(existing, label); }))
-            labels.push_back(label);
-    };
-    if (item.optional == Tri::Yes) add(L"Optional");
-    for (const auto& classification : item.classifications) add(classification);
-    if (item.classifications.empty()) add(item.updateType.empty() ? L"Type unknown" : item.updateType);
-    if (!item.severity.empty()) add(L"Severity: " + item.severity);
-    std::wstring text;
-    for (const auto& label : labels) { if (!text.empty()) text += L"; "; text += label; }
-    return text;
-}
-
-// ---- ANSI mode RAII ----
-class ConsoleStyle {
-public:
-    ConsoleStyle() {
-        CONSOLE_SCREEN_BUFFER_INFO info{};
-        g_width = ::GetConsoleScreenBufferInfo(::GetStdHandle(STD_OUTPUT_HANDLE), &info)
-            ? static_cast<size_t>((std::max)(40, int(info.srWindow.Right - info.srWindow.Left + 1))) : 100;
-        wchar_t buffer[1]{};
-        if (::GetEnvironmentVariableW(L"NO_COLOR", buffer, _countof(buffer)) != 0) return;
-
-        h_ = ::GetStdHandle(STD_OUTPUT_HANDLE);
-        if (h_ == INVALID_HANDLE_VALUE || h_ == nullptr) return;
-        if (!::GetConsoleMode(h_, &orig_)) return;           // redirected to file/pipe
-        if (::SetConsoleMode(h_, orig_ | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
-        changed_ = true;
-        g_color = true;
-        }
-    }
-    ~ConsoleStyle() {
-        if (g_color) out() << Rst();
-        out().flush();
-        if (changed_) ::SetConsoleMode(h_, orig_);
-        g_color = false;
-    }
-    ConsoleStyle(const ConsoleStyle&) = delete;
-    ConsoleStyle& operator=(const ConsoleStyle&) = delete;
-private:
-    HANDLE h_ = nullptr;
-    DWORD orig_ = 0;
-    bool changed_ = false;
-};
-
-std::wstring GroupName(const std::string& category) {
-    return category == "OS Security" ? L"Operating System" : Utf8ToWide(category);
-}
-
-const wchar_t* OutcomeColor(int awarded, int max) {
-    return awarded >= max ? Grn() : (awarded <= 0 ? Red() : Yel());
-}
-
-} // namespace
-
-void RenderConsole(const AssessmentResult& r, ReportView view) {
-    ConsoleStyle style;
+void console_detail::ConsoleLayout::Render(const AssessmentResult& r, ReportView view) {
 
     Banner(L"Windows Security Assessment");
     if (view == ReportView::Export) BackupWarning();
@@ -287,7 +45,7 @@ void RenderConsole(const AssessmentResult& r, ReportView view) {
            sb == Tri::Yes ? Grn() : (sb == Tri::No ? Red() : Yel()));
     }
     {
-        const bool virt = CpuVirtualizationAvailable(r.cpu);
+        const bool virt = r.cpu.virtualizationAvailable;
         KV(L"Virtualization", virt ? L"Supported" : L"Unsupported", virt ? Grn() : Red());
     }
     const Status runningStatus = r.security.virt.runningServicesKnown ? Status::Success : Status::Unavailable;
@@ -365,7 +123,7 @@ void RenderConsole(const AssessmentResult& r, ReportView view) {
             : value.status == Status::NotFound ? std::wstring(L"Not configured")
             : L"Unknown (" + std::wstring(ToW(value.status)) + L")";
     };
-    auto settingColor = [](const SettingView& view) {
+    auto settingColor = [this](const SettingView& view) {
         const bool known = view.value.status == Status::Success && (view.value.enabled == Tri::Yes || view.value.enabled == Tri::No);
         return !known ? Yel() : view.informational ? Cyn()
             : ((view.value.enabled == Tri::Yes) == view.favorable) ? Grn() : Yel();
@@ -583,7 +341,7 @@ void RenderConsole(const AssessmentResult& r, ReportView view) {
     if (!anyDir) out() << L"  " << Grn() << L"none exceeded" << Rst() << L"\n";
 
     // ------------------------------------------------------------ Rule breakdown
-    out() << L"\n  " << Dim() << L"Rule breakdown (awarded / max)" << Rst() << L"\n";
+    Section(L"Rule breakdown (awarded / max)");
 
     // Group by category so a rule can move without changing its stable ID.
     std::vector<std::string> categories;
@@ -620,8 +378,7 @@ void RenderConsole(const AssessmentResult& r, ReportView view) {
     }
 
     // ------------------------------------------------------------ Score
-    out() << L"\n";
-    Banner(L"SECURITY SCORE");
+    Section(L"SECURITY SCORE");
     {
         const double frac = r.score.maximum > 0
             ? static_cast<double>(r.score.total) / static_cast<double>(r.score.maximum) : 0.0;
@@ -652,9 +409,15 @@ void RenderConsole(const AssessmentResult& r, ReportView view) {
         }
     }
 
+    EndSection();
     out() << L"\n  " << Dim()
           << L"This is a hardening posture score. It does not guarantee security."
           << Rst() << L"\n";
+}
+
+void RenderConsole(const AssessmentResult& result, ReportView view) {
+    console_detail::ConsoleLayout layout;
+    layout.Render(result, view);
 }
 
 } // namespace sa

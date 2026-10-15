@@ -43,7 +43,7 @@ def export_report(app, *options):
         assert compact['d']['81']['88']['3'] in (0, 1, 2, 3)
         viewed, _ = run(app, '--json', 'view', str(compact_path))
         assert viewed.startswith('Windows Security Assessment')
-        assert viewed.index('Windows Security Assessment') < viewed.index('[!] BACKUP REPORT') < viewed.index('-- System')
+        assert viewed.index('Windows Security Assessment') < viewed.index('[!] BACKUP REPORT') < viewed.index('+- System')
         assert 'You are viewing a backup.' in viewed and 'current system state.' in viewed
         assert '-- Applications' not in viewed
         assert 'Windows Security Assessment' in viewed and 'Rule breakdown' in viewed
@@ -186,7 +186,7 @@ def main():
     assert 'SECURITY SCORE' in console and '\x1b[' not in console
     assert 'BACKUP REPORT' not in console and '-- Applications' not in console
     assert 'Windows update details available' not in console
-    assert console.index('Rule breakdown') < console.index('SECURITY SCORE') < console.index('-- Warnings')
+    assert console.index('Rule breakdown') < console.index('SECURITY SCORE') < console.index('+- Warnings')
     assert all(hidden not in console for hidden in ['Active Network Adapters', 'UDP Port 69', 'Configured RDP port', 'RDP scope', 'Local TCP Listeners'])
     assert 'hardening' in report and 'warnings' not in report['score']
     assert rules['enc.bl']['maxPoints'] == 50

@@ -26,7 +26,7 @@ Windows 10 or newer is required. Open a terminal in the folder containing the ex
 
 Run the terminal **as administrator** for the fullest assessment. Without elevation, restricted checks remain unverified instead of being reported as disabled.
 
-The console ends with the **rule breakdown**, **total score**, and **warnings**, in that order. Warnings are grouped as Critical, High, Medium, or Low and include an action to review. Missing evidence is clearly identified as a verification gap.
+Each category appears in its own box, with long values wrapping inside the border. The console ends with the **rule breakdown**, **total score**, and **warnings**, in that order. Warnings are grouped as Critical, High, Medium, or Low and include an action to review. Missing evidence is clearly identified as a verification gap.
 
 ## Save a JSON report
 

@@ -86,6 +86,8 @@ void BuildWarnings(const AssessmentResult& assessment, ScoreReport& report) {
         bool verification = state.find(L"unknown") != std::wstring::npos || state == L"unavailable" ||
             state == L"version unverified" || state == L"dhcp controlled" || state == L"no fixed drives" ||
             (state == L"not configured" && rule.id != "acc.lockout" && rule.id != "os.autolock");
+        if (rule.id == "net.ntlm" && (assessment.hardening.lmCompatibilityStatus != Status::Success ||
+            assessment.hardening.lmCompatibility > 5)) verification = true;
         if (rule.id == "net.fw" && !std::ranges::any_of(assessment.firewall.profiles,
             [](const auto& profile) { return profile.status == Status::Success && !profile.enabled; })) verification = true;
         if (rule.id == "enc.bl" && !std::ranges::any_of(assessment.storage.volumes,
@@ -538,9 +540,8 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
             "Checks the device inactivity policy; user screen-saver policies can impose additional locking."));
     const R ntlm{"net.ntlm", "Modern network sign-in protection", 20, Category::NetworkSecurity};
     rep.rules.push_back(H.lmCompatibilityStatus == Status::Success && H.lmCompatibility >= 3 && H.lmCompatibility <= 5
-        ? Full(ntlm, "The configured LAN Manager level sends NTLMv2 responses only; higher levels further restrict acceptance on domain controllers.", "Modern responses only")
-        : Zero(ntlm, H.lmCompatibilityStatus == Status::Success ? "Legacy allowed" : "Unknown",
-            "Checks an explicit LAN Manager authentication level; an absent value does not prove legacy authentication is active."));
+        ? Full(ntlm, WideToUtf8(NetworkSignInReason(H)), WideToUtf8(NetworkSignInState(H)))
+        : Zero(ntlm, WideToUtf8(NetworkSignInState(H)), WideToUtf8(NetworkSignInReason(H))));
     SecuritySetting desktop;
     desktop.status = S.uac.status;
     if (desktop.status == Status::Success && S.uac.promptOnSecureDesktop <= 1)

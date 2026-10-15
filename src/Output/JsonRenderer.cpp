@@ -1,4 +1,5 @@
 #include "JsonRenderer.h"
+#include "JsonCompact.h"
 #include "../Utilities.h"
 #include <sstream>
 #include <cstdio>
@@ -41,7 +42,7 @@ static std::string SettingJson(const SecuritySetting& setting) {
 }
 
 
-std::string RenderJson(const AssessmentResult& r) {
+std::string RenderJson(const AssessmentResult& r, JsonFormat format) {
     std::ostringstream o;
     o.imbue(std::locale::classic());
     o << "{";
@@ -425,7 +426,7 @@ std::string RenderJson(const AssessmentResult& r) {
           << ",\"awardedPoints\":" << score.awardedPoints << ",\"reason\":" << Q(score.reason) << "}";
     }
     o << "]}}";
-    return o.str();
+    return format == JsonFormat::Compact ? CompactJson(o.str()) : o.str();
 }
 
 } // namespace sa

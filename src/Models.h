@@ -323,6 +323,39 @@ struct HardeningInfo {
     Status lockoutStatus = Status::Unavailable;
 };
 
+// Describe absence separately from collection failures; never infer a secure
+// effective policy from an absent registry value.
+inline const wchar_t* NetworkSignInState(const HardeningInfo& info) {
+    switch (info.lmCompatibilityStatus) {
+    case Status::NotFound: return L"Not configured";
+    case Status::AccessDenied: return L"Access denied";
+    case Status::Unsupported: return L"Invalid value type";
+    case Status::Unavailable: return L"Unavailable";
+    case Status::Error: return info.lmCompatibility > 5 ? L"Invalid policy value" : L"Read error";
+    case Status::Success:
+        return info.lmCompatibility > 5 ? L"Invalid policy value"
+            : info.lmCompatibility >= 3 ? L"Modern responses only" : L"Legacy allowed";
+    }
+    return L"Read error";
+}
+inline std::wstring NetworkSignInReason(const HardeningInfo& info) {
+    switch (info.lmCompatibilityStatus) {
+    case Status::NotFound: return L"The network sign-in policy is not explicitly configured (LmCompatibilityLevel is absent). Windows defaults were not verified; this does not mean older sign-in methods are active.";
+    case Status::AccessDenied: return L"Windows denied access while reading the network sign-in policy. Run as administrator and try again.";
+    case Status::Unsupported: return L"The network sign-in policy has an invalid registry type; a DWORD value from 0 to 5 is required.";
+    case Status::Unavailable: return L"The network sign-in policy could not be queried on this system.";
+    case Status::Error:
+        return info.lmCompatibility > 5 ? L"The network sign-in policy contains an invalid value (expected 0 to 5)."
+            : L"Windows returned an error while reading the network sign-in policy; its configuration could not be verified.";
+    case Status::Success:
+        if (info.lmCompatibility > 5) return L"The recorded network sign-in policy is outside the supported range (0 to 5).";
+        return info.lmCompatibility >= 3
+            ? L"The configured policy sends modern NTLMv2 responses only (level " + std::to_wstring(info.lmCompatibility) + L"). This does not prove that all incoming older sign-in methods are blocked."
+            : L"The configured policy permits older network sign-in responses (level " + std::to_wstring(info.lmCompatibility) + L").";
+    }
+    return L"The network sign-in policy could not be verified.";
+}
+
 struct ServiceEntry {
     std::wstring name;
     std::wstring displayName;

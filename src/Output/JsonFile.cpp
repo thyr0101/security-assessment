@@ -1,5 +1,6 @@
 #include "JsonFile.h"
 #include "JsonReportReader.h"
+#include "JsonCompact.h"
 #include "../Utilities.h"
 #include <windows.data.json.h>
 #include <wrl/client.h>
@@ -123,6 +124,14 @@ std::expected<AssessmentResult, std::wstring> ReadJsonReport(const std::filesyst
     boolean parsed = false;
     if (FAILED(parser->TryParse(input.Get(), root.GetAddressOf(), &parsed)) || !parsed || !root)
         return Error(L"The file contains invalid JSON.");
+    const auto expanded = ExpandCompactJson(root.Get());
+    if (!expanded) return Error(expanded.error());
+    HString expandedInput;
+    if (FAILED(expandedInput.Set(expanded->data(), static_cast<UINT32>(expanded->size()))))
+        return Error(L"Cannot restore the compact report.");
+    root.Reset(); parsed = false;
+    if (FAILED(parser->TryParse(expandedInput.Get(), root.GetAddressOf(), &parsed)) || !parsed || !root)
+        return Error(L"The compact report could not be restored.");
     if (!ReportShape(root.Get())) return Error(L"The JSON file does not have the structure of a Security Assessment report.");
     bool valid = true;
     auto result = json_detail::ReadReport(json_detail::Object(root, valid));

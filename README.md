@@ -30,19 +30,25 @@ The console ends with the **rule breakdown**, **total score**, and **warnings**,
 
 ## Save a JSON report
 
-Generate a report with an automatic filename in the current folder:
+Choose the export format interactively:
 
 ```powershell
 .\SecurityAssessment.exe --json
 ```
 
-Or choose a filename:
+The prompt explains both formats. For scripts, specify the format directly (no prompt):
 
 ```powershell
-.\SecurityAssessment.exe --json "reports\assessment.json"
+.\SecurityAssessment.exe --json 0 "assessment.json"
+.\SecurityAssessment.exe --json 1 "readable-assessment.json"
 ```
 
-The destination folder must exist. Existing files are never overwritten. The command prints the saved file's path, rather than the report contents.
+| Mode | Contents | Opens in the app viewer |
+| --- | --- | --- |
+| `0` Compact | Short field keys, numeric states and references to shared text. Disabled = 0, enabled = 1, unknown = 2. | Yes |
+| `1` Readable | Descriptive field names and text states for manual inspection or other tools. | No |
+
+Omit the filename to generate one in the current folder. The destination folder must exist, and existing files are never overwritten. The command prints the saved file's path. Compact encoding is **not encryption**; both formats contain system details.
 
 ### View a saved JSON report
 
@@ -52,7 +58,7 @@ The destination folder must exist. Existing files are never overwritten. The com
 
 This opens the regular console report using the saved data and scores. A red warning box below the title states that you are viewing a backup and the results do not represent the current system state. It does not run another assessment.
 
-Warnings are omitted from JSON exports. The saved report viewer displays **“Warnings are disabled when viewing an export”**, including when opening older reports that contain warnings. Older reports with the expected system and score structure remain supported; fields absent from those files cannot be restored.
+Warnings are omitted from JSON exports. The saved report viewer displays **“Warnings are disabled when viewing an export”**. The viewer accepts only compact mode `0` reports. Readable mode `1` reports and older plain-text JSON exports are rejected with an explanation.
 
 For command help:
 
@@ -63,6 +69,7 @@ For command help:
 ## Understanding the results
 
 - The maximum score remains **1000**; BitLocker contributes up to **50** points.
+- Network sign-in protection distinguishes an unconfigured policy, denied access, invalid data and read errors. An absent policy is not assumed to be enabled or disabled.
 - Only verified results receive the corresponding credit. Unreadable or missing configuration is distinguished from a confirmed weakness.
 - Warnings explain the findings and do not apply extra score deductions.
 - Cached update results can differ from a fresh Windows Update scan.

@@ -69,6 +69,7 @@
     <ClCompile Include="src\Output\ConsoleRenderer.cpp" />
     <ClCompile Include="src\Output\JsonRenderer.cpp" />
     <ClCompile Include="src\Output\JsonFile.cpp" />
+    <ClCompile Include="src\Output\JsonCompact.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\Common.h" />
@@ -91,6 +92,7 @@
     <ClInclude Include="src\Output\ConsoleRenderer.h" />
     <ClInclude Include="src\Output\JsonRenderer.h" />
     <ClInclude Include="src\Output\JsonFile.h" />
+    <ClInclude Include="src\Output\JsonCompact.h" />
     <ClInclude Include="src\Output\JsonReportReader.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

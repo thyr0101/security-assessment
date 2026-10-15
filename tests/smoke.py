@@ -20,10 +20,26 @@ def run(executable, *args, cwd=None):
 def export_report(app, *options):
     with tempfile.TemporaryDirectory(prefix='sa-json-') as folder:
         path = Path(folder) / 'saved report.json'
-        output, elapsed = run(app, '--json', str(path), *options)
+        output, elapsed = run(app, '--json', '1', str(path), *options)
         assert output.startswith('JSON report saved to:') and not output.lstrip().startswith('{')
         report = json.loads(path.read_text(encoding='utf-8'))
-        viewed, _ = run(app, '--json', 'view', str(path))
+        rejected = subprocess.run([str(app), '--json', 'view', str(path)], capture_output=True, timeout=15)
+        assert rejected.returncode == 1 and b'compact exports only' in rejected.stderr
+        compact_path = Path(folder) / 'compact.json'
+        run(app, '--json', '0', str(compact_path), *options)
+        compact = json.loads(compact_path.read_text(encoding='utf-8'))
+        assert compact['v'] == 1 and compact['s'][:4] == ['Disabled', 'Enabled', 'Unknown', 'N/A']
+        assert 'system' not in compact and set(compact) == {'v', 's', 'd'}
+        assert len(compact_path.read_bytes()) < len(path.read_bytes())
+        def numeric_data(value):
+            if isinstance(value, dict):
+                return all(len(k) <= 2 and numeric_data(v) for k, v in value.items())
+            if isinstance(value, list):
+                return all(numeric_data(v) for v in value)
+            return value is None or type(value) in (int, float)
+        assert numeric_data(compact['d'])
+        assert compact['d']['28']['2f']['0'] in (0, 1, 2, 3)
+        viewed, _ = run(app, '--json', 'view', str(compact_path))
         assert viewed.startswith('Windows Security Assessment')
         assert viewed.index('Windows Security Assessment') < viewed.index('[!] BACKUP REPORT') < viewed.index('-- System')
         assert 'You are viewing a backup.' in viewed and 'current system state.' in viewed
@@ -34,17 +50,17 @@ def export_report(app, *options):
         assert 'warnings' not in report['score']
         assert report['system']['computerName'] in viewed
         # Viewing uses saved values even if they differ from this machine.
-        modified = json.loads(json.dumps(report))
-        modified['system']['computerName'] = 'OFFLINE_COMPUTER_SENTINEL'
-        modified['score']['total'] = 123
-        modified['score']['warnings'] = [{'title': 'OLD_WARNING_SENTINEL'}]
+        modified = json.loads(json.dumps(compact))
+        modified['d']['4']['a'] = len(modified['s'])
+        modified['s'].append('OFFLINE_COMPUTER_SENTINEL')
+        modified['d']['5w']['5x'] = 123
         offline = Path(folder) / 'offline.json'
         offline.write_text(json.dumps(modified), encoding='utf-8')
         restored, _ = run(app, '--json', 'view', str(offline))
         assert 'OFFLINE_COMPUTER_SENTINEL' in restored and '123 / 1000' in restored
         assert 'OLD_WARNING_SENTINEL' not in restored
         before = path.read_bytes()
-        duplicate = subprocess.run([str(app), '--json', str(path), '--no-hash'], capture_output=True, timeout=65)
+        duplicate = subprocess.run([str(app), '--json', '1', str(path), '--no-hash'], capture_output=True, timeout=65)
         assert duplicate.returncode == 1 and path.read_bytes() == before
         return report, elapsed
 
@@ -160,16 +176,43 @@ def main():
     assert sum(rule['maxPoints'] for rule in rules.values() if rule['category'] == 'Network Security') == 200
     assert 'Update Services' in console and 'Pending Updates' in console
     with tempfile.TemporaryDirectory(prefix='sa-auto-json-') as folder:
-        output, _ = run(app, '--json', '--no-hash', cwd=folder)
+        output, _ = run(app, '--json', '1', '--no-hash', cwd=folder)
         generated = list(Path(folder).glob('security-assessment-*.json'))
         assert len(generated) == 1 and output.startswith('JSON report saved to:')
         assert json.loads(generated[0].read_text(encoding='utf-8'))['score']['maximum'] == 1000
-    for options in [('--json', 'view'), ('--json', '--json'), ('--json', 'view', 'missing.json', '--no-hash')]:
+    # Interactive format choices, retry handling and clean EOF for unattended callers.
+    for mode in ('0', '1'):
+        with tempfile.TemporaryDirectory(prefix='sa-prompt-') as folder:
+            prompted = subprocess.run([str(app), '--json'], cwd=folder, input=('invalid\n'+mode+'\n').encode(),
+                                      capture_output=True, timeout=90)
+            assert prompted.returncode == 0 and b'Please enter 0' in prompted.stdout
+            assert b'cannot be viewed in the app' in prompted.stdout
+            files = list(Path(folder).glob('security-assessment-*.json'))
+            assert len(files) == 1
+            data = json.loads(files[0].read_text(encoding='utf-8'))
+            assert ('v' in data) == (mode == '0')
+    with tempfile.TemporaryDirectory(prefix='sa-eof-') as folder:
+        eof = subprocess.run([str(app), '--json'], cwd=folder, input=b'', capture_output=True, timeout=10)
+        assert eof.returncode == 2 and not list(Path(folder).glob('*.json'))
+    with tempfile.TemporaryDirectory(prefix='sa-invalid-compact-') as folder:
+        invalid_path = Path(folder) / 'bad.json'
+        corruptions = [
+            {'v': 999, 's': [], 'd': {}},
+            {'v': 1, 's': ['bad', 'Enabled', 'Unknown', 'N/A'], 'd': {}},
+            {'v': 1, 's': ['Disabled', 'Enabled', 'Unknown', 'N/A'], 'd': {'zz': 0}},
+            {'v': 1, 's': ['Disabled', 'Enabled', 'Unknown', 'N/A'], 'd': {'4': {'a': 999}}},
+            {'v': 1, 's': ['Disabled', 'Enabled', 'Unknown', 'N/A'], 'd': {'28': {'2f': {'0': 9}}}},
+        ]
+        for bad in corruptions:
+            invalid_path.write_text(json.dumps(bad), encoding='utf-8')
+            rejected = subprocess.run([str(app), '--json', 'view', str(invalid_path)], capture_output=True, timeout=15)
+            assert rejected.returncode == 1 and not rejected.stdout
+    for options in [('--json', '2'), ('--json', '0', 'extra.json', 'extra'), ('--json', 'view'), ('--json', '--json'), ('--json', 'view', 'missing.json', '--no-hash')]:
         invalid = subprocess.run([str(app), *options], capture_output=True, timeout=10)
         assert invalid.returncode == 2 and not invalid.stdout
     assert 'privacy' not in report and 'minimumPasswordLength' not in report['hardening']
     assert all(rule['id'] != 'acc.password' for rule in report['score']['rules'])
-    print(f"Smoke checks passed: JSON files/viewer, removed applications, help, redirected console; elevated={report['security']['elevated']}.")
+    print(f"Smoke checks passed: compact/readable JSON, prompt, numeric codes, viewer, help, redirected console; elevated={report['security']['elevated']}.")
     print(f"Elapsed: --no-hash {no_hash_time:.3f}s; default {default_time:.3f}s (single runs, not a benchmark).")
     if args.baseline:
         with tempfile.TemporaryDirectory(prefix='sa-baseline-') as folder:

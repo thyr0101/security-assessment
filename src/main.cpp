@@ -9,6 +9,7 @@
 #include <atomic>
 #include <functional>
 #include <thread>
+#include <optional>
 #include "Common.h"
 #include "Utilities.h"
 #include "Collectors/SystemCollector.h"
@@ -57,10 +58,12 @@ int wmain(int argc, wchar_t** argv) {
         ~ConsoleCodePage() { if (changed) ::SetConsoleOutputCP(original); }
     } consoleCodePage;
 
-    constexpr auto usage = L"Usage: SecurityAssessment [--json [output-file]]\n"
-        L"       SecurityAssessment --json view <report-file>\n";
+    constexpr auto usage = L"Usage: SecurityAssessment [--json [0|1] [output-file]]\n"
+        L"       SecurityAssessment --json view <compact-report-file>\n"
+        L"       0 = compact (viewable); 1 = readable text (not viewable). Omit to choose interactively.\n";
     bool json = false, viewJson = false, noHash = false;
     std::filesystem::path jsonPath;
+    std::optional<JsonFormat> jsonFormat;
     auto invalid = [&](const wchar_t* reason) {
         std::wcerr << reason << L"\n" << usage;
         return 2;
@@ -76,8 +79,16 @@ int wmain(int argc, wchar_t** argv) {
                 if (i + 1 >= argc || std::wstring_view(argv[i + 1]).starts_with(L"-"))
                     return invalid(L"The JSON viewer requires a report filename.");
                 jsonPath = argv[++i];
-            } else if (i + 1 < argc && !std::wstring_view(argv[i + 1]).starts_with(L"-")) {
-                jsonPath = argv[++i];
+            } else {
+                if (i + 1 < argc) {
+                    const std::wstring_view mode = argv[i + 1];
+                    if (mode == L"0" || mode == L"1") {
+                        jsonFormat = mode == L"0" ? JsonFormat::Compact : JsonFormat::Readable;
+                        ++i;
+                    } else if (!mode.empty() && mode.find_first_not_of(L"0123456789") == mode.npos)
+                        return invalid(L"JSON format must be 0 (compact) or 1 (readable).");
+                }
+                if (i + 1 < argc && !std::wstring_view(argv[i + 1]).starts_with(L"-")) jsonPath = argv[++i];
             }
         } else if (argument == L"--no-hash") noHash = true; // Legacy no-op: application hashing was removed.
         else if (argument == L"--help" || argument == L"-h") {
@@ -94,6 +105,25 @@ int wmain(int argc, wchar_t** argv) {
         RenderConsole(*saved, ReportView::Export);
         std::wcout.flush();
         return std::wcout ? 0 : 1;
+    }
+
+    if (json && !jsonFormat) {
+        std::wcout << L"Choose a JSON export format:\n"
+            L"  0 - Compact: short keys, numeric states and shared text; opens in the backup viewer.\n"
+            L"  1 - Readable: descriptive fields and state names; for manual inspection, cannot be viewed in the app.\n"
+            L"Compact encoding is not encryption. Both formats contain system details.\n"
+            L"Enter 0 or 1: " << std::flush;
+        std::string choice;
+        while (std::getline(std::cin, choice)) {
+            const auto first = choice.find_first_not_of(" \t\r");
+            const auto last = choice.find_last_not_of(" \t\r");
+            if (first != choice.npos && first == last && (choice[first] == '0' || choice[first] == '1')) {
+                jsonFormat = choice[first] == '0' ? JsonFormat::Compact : JsonFormat::Readable;
+                break;
+            }
+            std::wcout << L"Please enter 0 (compact) or 1 (readable): " << std::flush;
+        }
+        if (!jsonFormat) { std::wcerr << L"No format selected. Use --json 0 or --json 1 for unattended exports.\n"; return 2; }
     }
 
     ComInit ci; // The main thread and every collector worker initialize COM separately.
@@ -187,7 +217,7 @@ int wmain(int argc, wchar_t** argv) {
     catch (...) { r.score.total = 0; }
 
     if (json) {
-        const auto saved = SaveJsonReport(RenderJson(r), jsonPath);
+        const auto saved = SaveJsonReport(RenderJson(r, *jsonFormat), jsonPath);
         if (!saved) { std::wcerr << saved.error() << L"\n"; return 1; }
         std::wcout << L"JSON report saved to: " << saved->wstring() << L"\n";
         std::wcout.flush();

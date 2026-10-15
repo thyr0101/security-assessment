@@ -401,10 +401,11 @@ void RenderConsole(const AssessmentResult& r, ReportView view) {
     settings({L"SMB guest logons", network.smbGuestLogons, L"Allowed", L"Blocked", false},
              {L"Local lookup fallback", network.llmnr, L"Allowed", L"Disabled", false});
     const auto& hardening = r.hardening;
-    KV(L"Network sign-in", hardening.lmCompatibilityStatus != Status::Success ? L"Unknown / not configured"
-        : hardening.lmCompatibility >= 3 ? L"Modern sign-in responses only"
-        : L"Old sign-in responses allowed",
-        hardening.lmCompatibilityStatus == Status::Success && hardening.lmCompatibility >= 3 ? Grn() : Yel());
+    const bool modernSignIn = hardening.lmCompatibilityStatus == Status::Success &&
+        hardening.lmCompatibility >= 3 && hardening.lmCompatibility <= 5;
+    KV(L"Network sign-in", NetworkSignInState(hardening), modernSignIn ? Grn() : Yel());
+    if (hardening.lmCompatibilityStatus != Status::Success || hardening.lmCompatibility > 5)
+        Paragraph(NetworkSignInReason(hardening), 6, Yel());
     SubHeader(L"SMB Encryption & Remote Access", L"", Dim());
     settings({L"Global SMB encryption", network.smbEncryption, L"Enabled", L"Disabled", true, true},
              {L"Reject unencrypted SMB", network.smbRejectUnencrypted, L"Yes", L"No", true, true});

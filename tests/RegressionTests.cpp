@@ -7,6 +7,7 @@
 #include "Collectors/PersistenceCollector.h"
 #include "Output/JsonRenderer.h"
 #include "Output/JsonFile.h"
+#include "Output/JsonCompact.h"
 #include "Output/ConsoleRenderer.h"
 #include "Security/ScoreEngine.h"
 #include "WmiHelper.h"
@@ -530,6 +531,29 @@ static void TestHardeningAndWarnings() {
           "console distinguishes critical findings from unverified coverage");
     std::ofstream("warnings-output.json", std::ios::binary) << RenderJson(result);
 }
+static void TestNetworkSignIn() {
+    AssessmentResult result;
+    for (DWORD level = 0; level <= 6; ++level) {
+        result.hardening.lmCompatibilityStatus = Status::Success;
+        result.hardening.lmCompatibility = level;
+        const auto rule = Rule(ComputeScore(result), "net.ntlm");
+        Check(rule.awardedPoints == (level >= 3 && level <= 5 ? 20 : 0), "only supported modern sign-in levels receive credit");
+        Check(rule.state != "Unknown", "valid or invalid configured policy has a specific state");
+    }
+    for (const auto status : {Status::NotFound, Status::AccessDenied, Status::Unsupported, Status::Error, Status::Unavailable}) {
+        result.hardening.lmCompatibilityStatus = status;
+        result.hardening.lmCompatibility = 0;
+        result.score = ComputeScore(result);
+        const auto& rule = Rule(result.score, "net.ntlm");
+        Check(rule.state != "Unknown" && rule.awardedPoints == 0 && !rule.reason.empty(), "policy absence and read errors have explanations");
+        const auto console = CaptureConsole(result);
+        Check(console.find(NetworkSignInState(result.hardening)) != std::wstring::npos &&
+              console.find(L"Unknown / not configured") == std::wstring::npos, "console distinguishes absent and failed sign-in policy reads");
+        Check(std::ranges::none_of(result.score.warnings, [](const auto& warning) { return warning.ruleId == "net.ntlm"; }),
+              "unverified sign-in policy does not invent a confirmed legacy weakness");
+    }
+}
+
 static void TestJsonFiles(Fixture& fixture) {
     AssessmentResult result;
     result.os.productName = L"quoted \"name\" with [braces] and \\slashes";
@@ -552,12 +576,14 @@ static void TestJsonFiles(Fixture& fixture) {
     result.score.total = 321; // A recorded score must never be recomputed during viewing.
     Check(!result.score.warnings.empty(), "fixture has live warnings to exclude");
     const auto text = RenderJson(result);
+    const auto compact = RenderJson(result, JsonFormat::Compact);
+    Check(compact.size() < text.size(), "compact reports reduce repeated keys and text");
     Check(text.find("\"warnings\"") == std::string::npos, "JSON exports omit warnings by default");
     Check(text.find("\"applications\"") == std::string::npos, "JSON exports omit removed applications");
     Check(std::ranges::none_of(result.score.rules, [](const auto& rule) { return rule.id == "hyg.appinv"; }),
           "removed application inventory does not create scoring rules or verification gaps");
     const auto path = fixture.dir / L"saved report \u03a9.json";
-    const auto saved = SaveJsonReport(text, path);
+    const auto saved = SaveJsonReport(compact, path);
     Check(saved.has_value() && fs::exists(path), "save JSON to a Unicode path with spaces");
     const auto viewed = ReadJsonReport(path);
     Check(viewed.has_value(), "native Windows parser restores a saved report");
@@ -581,7 +607,7 @@ static void TestJsonFiles(Fixture& fixture) {
     Check(CaptureConsole(result, ReportView::Export).find(L"verification gap") == std::wstring::npos,
           "export context suppresses even populated warning lists");
     Check(!SaveJsonReport("replacement", path), "exports do not overwrite existing files");
-    Check(fs::file_size(path) == text.size() + 1, "failed overwrite preserves original file");
+    Check(fs::file_size(path) == compact.size() + 1, "failed overwrite preserves original file");
     Check(!SaveJsonReport(text, fixture.dir / L"missing" / L"report.json"), "unavailable output directories fail clearly");
     Check(!ReadJsonReport(fixture.dir / L"missing.json"), "missing reports cannot be viewed");
     const auto bad = fixture.dir / L"bad.json";
@@ -589,9 +615,9 @@ static void TestJsonFiles(Fixture& fixture) {
         std::ofstream(bad, std::ios::binary) << invalid;
         Check(!ReadJsonReport(bad), "empty, malformed, non-report and invalid UTF-8 files are rejected");
     }
-    std::ofstream(bad, std::ios::binary) << text << '\0';
+    std::ofstream(bad, std::ios::binary) << compact << '\0';
     Check(!ReadJsonReport(bad), "raw NUL characters cannot hide trailing report data");
-    std::ofstream(bad, std::ios::binary) << "\xef\xbb\xbf" << text;
+    std::ofstream(bad, std::ios::binary) << "\xef\xbb\xbf" << compact;
     Check(ReadJsonReport(bad).has_value(), "UTF-8 BOM reports remain viewable");
     auto legacy = text;
     legacy.insert(legacy.size() - 2, ",\"warnings\":[{\"title\":\"OLD_WARNING_SENTINEL\"}]");
@@ -599,8 +625,8 @@ static void TestJsonFiles(Fixture& fixture) {
     legacy.insert(legacy.size() - 1, ",\"applications\":[{\"name\":\"OLD_APPLICATION_SENTINEL\"}]");
     std::ofstream(bad, std::ios::binary) << legacy;
     auto old = ReadJsonReport(bad);
-    Check(old && old->score.warnings.empty() && RenderJson(*old) == text, "legacy warnings and application arrays are ignored");
-    std::ofstream(bad, std::ios::binary) << R"({"system":{"productName":"\u001b[2J\nspoof"},"score":{"total":7,"maximum":10,"rules":[]}})";
+    Check(!old && old.error().find(L"compact exports only") != std::wstring::npos, "readable and legacy exports are not viewable");
+    std::ofstream(bad, std::ios::binary) << CompactJson(R"({"system":{"productName":"\u001b[2J\nspoof"},"score":{"total":7,"maximum":10,"rules":[]}})");
     auto controls = ReadJsonReport(bad);
     Check(controls && controls->os.productName == L"\\u001B[2J\\u000Aspoof", "imported controls cannot inject terminal escapes");
     for (const auto* invalid : {
@@ -609,12 +635,43 @@ static void TestJsonFiles(Fixture& fixture) {
         R"({"system":{},"score":{"total":0,"maximum":10,"rules":[{"maxPoints":-1}]}})",
         R"({"system":{"build":"bad"},"score":{"total":0,"maximum":10,"rules":[]}})",
         R"({"system":{"uptimeSeconds":18446744073709551616},"score":{"total":0,"maximum":10,"rules":[]}})"}) {
-        std::ofstream(bad, std::ios::binary) << invalid;
-        Check(!ReadJsonReport(bad), "invalid field types, out-of-range numbers and impossible rule scores are rejected");
+        std::string encoded;
+        try { encoded = CompactJson(invalid); }
+        catch (const std::runtime_error&) { continue; } // Invalid readable types cannot be compacted.
+        std::ofstream(bad, std::ios::binary) << encoded;
+        Check(!ReadJsonReport(bad), "out-of-range numbers and impossible compact rule scores are rejected");
+    }
+    // Exercise every native status/tri-state and numeric/text arrays independently
+    // of the default fixture values. Text that resembles a state stays text.
+    for (const auto status : {Status::Success, Status::NotFound, Status::AccessDenied, Status::Unsupported, Status::Unavailable, Status::Error}) {
+        auto coded = result;
+        coded.os.status = status;
+        coded.defender.enabledStatus = status;
+        coded.firewall.activeProfilesStatus = status;
+        coded.network.rdp.status = status;
+        coded.os.computerName = L"Enabled";
+        NetworkAdapterInfo adapter; adapter.ipv4 = {L"192.0.2.1", L"192.0.2.2"}; adapter.dns = {L"192.0.2.53"};
+        coded.network.adapters.push_back(adapter);
+        for (const auto tri : {Tri::Yes, Tri::No, Tri::Unknown, Tri::NotApplicable}) {
+            coded.security.secureBoot.enabled = tri;
+            coded.network.rdp.enabled = tri;
+            coded.defender.periodicScanning = tri;
+            std::ofstream(bad, std::ios::binary) << RenderJson(coded, JsonFormat::Compact);
+            const auto restored = ReadJsonReport(bad);
+            Check(restored && RenderJson(*restored) == RenderJson(coded), "all compact states and arrays restore exactly");
+        }
+    }
+    for (const auto state : {AntivirusState::Unknown, AntivirusState::Enabled, AntivirusState::Disabled, AntivirusState::Snoozed, AntivirusState::Expired}) {
+        auto coded = result;
+        AntivirusProduct product; product.name = L"State fixture"; product.state = state;
+        coded.antivirus.products.push_back(product);
+        std::ofstream(bad, std::ios::binary) << RenderJson(coded, JsonFormat::Compact);
+        const auto restored = ReadJsonReport(bad);
+        Check(restored && restored->antivirus.products[0].state == state, "antivirus codes restore independently of rule-state text");
     }
     auto oversized = result;
     oversized.score.rules.front().description.assign(16385, 'x');
-    std::ofstream(bad, std::ios::binary) << RenderJson(oversized);
+    std::ofstream(bad, std::ios::binary) << RenderJson(oversized, JsonFormat::Compact);
     Check(!ReadJsonReport(bad), "oversized rule labels cannot multiply console padding without bound");
     std::ofstream(bad, std::ios::binary) << std::string(129, '[') << std::string(129, ']');
     Check(!ReadJsonReport(bad), "deeply nested inputs are rejected before parsing");
@@ -632,6 +689,7 @@ int main() {
         TestPartialCollection();
         TestHardeningAndWarnings();
         TestJsonFiles(fixture);
+        TestNetworkSignIn();
         TestComAndWmi();
         std::cout << "All native regressions passed.\n";
         return 0;

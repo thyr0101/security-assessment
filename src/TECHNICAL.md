@@ -21,6 +21,7 @@ All runtime dependencies are Windows components or the C++ runtime. No Python pa
 
 | Location | Responsibility |
 | --- | --- |
+| `Output/JsonCompact` | Versioned short-key encoding, numeric states, shared text and bounded expansion. |
 | `Output/JsonReportReader.h` | Restores typed saved report fields through Windows JSON interfaces, without collection or rescoring. |
 | `main.cpp` | Validates CLI arguments, coordinates collectors, and selects console/export/view mode. |
 | `Models.h`, `Common.h` | Typed assessment data, read statuses, score rules, and warnings. |
@@ -74,20 +75,20 @@ Stable IDs such as `net.ntlm` remain machine-facing identifiers; user-facing lab
 ## CLI, export, and viewer
 
 ```text
-SecurityAssessment [--json [output-file]]
+SecurityAssessment [--json [0|1] [output-file]]
 SecurityAssessment --json view <report-file>
 ```
 
 - Default mode renders the console assessment.
-- `--json` runs the assessment and creates a UTF-8 file without a BOM. A generated `security-assessment-YYYYMMDD-HHMMSS-mmm-PID.json` filename uses the system's local clock and current folder.
+- `--json` prompts for mode 0 (compact and viewable) or 1 (descriptive JSON, not viewable) before collection. EOF without a choice exits with code 2. `--json 0 [file]` and `--json 1 [file]` bypass the prompt. Both modes run the assessment and create a UTF-8 file without a BOM. A generated `security-assessment-YYYYMMDD-HHMMSS-mmm-PID.json` filename uses the system's local clock and current folder.
 - An explicit destination is resolved from the current folder. Parents must exist. `CREATE_NEW` prevents replacement of existing files, including links. Writes are exclusive and flushed before success is reported; failed writes mark the owned handle for deletion where possible.
 - Export prints only a confirmation/path. It no longer emits JSON on stdout. This intentionally changes the old CLI contract.
-- `--json view <file>` reads a saved report without running collectors. It accepts UTF-8 with or without a BOM, validates JSON and the system/score/rules structure with Windows' parser, then restores the typed assessment model and renders the regular console report with a red backup warning box between the title and System section. Saved scores and rules are preserved without calling collectors or the score engine. Validation checks report structure, not provenance or authenticity.
+- `--json view <file>` reads a saved report without running collectors. It accepts UTF-8 with or without a BOM, validates JSON, checks the compact format version and expands its short keys, numeric states and shared text with strict code/reference bounds. It validates the restored system/score/rules structure with Windows' parser, then restores the typed assessment model and renders the regular console report with a red backup warning box between the title and System section. Saved scores and rules are preserved without calling collectors or the score engine. Validation checks report structure, not provenance or authenticity.
 - The viewer accepts up to 64 MiB input, nesting up to 128 levels, 100,000 items per array, and 4,096 score rules with descriptions up to 16,384 UTF-8 bytes. Typed fields, numeric ranges, and rule score bounds are validated; imported terminal control characters are displayed as visible Unicode escapes. Invalid encoding, malformed JSON, unrelated JSON, unavailable files, and excessive input fail with an error.
 - `--no-hash` remains accepted as a legacy no-op for assessment scripts and cannot be combined with view mode. Application collection and executable hashing no longer run. Unexpected arguments and duplicate `--json` are rejected before collecting data.
 - Exit codes: 0 for success/help, 1 for file/runtime output errors, 2 for invalid arguments. The score does not control the exit code.
 
-JSON retains the `system`, `hardware`, `security`, `defender`, `antivirus`, `firewall`, `storage`, `network`, `hardening`, `services`, `registryFindings`, `directoryFindings`, `persistence`, `windowsUpdate`, and `score` report data. Native boolean readings must be interpreted with their accompanying status fields. Warnings are omitted from exports and ignored when importing older files. The viewer explicitly displays “Warnings are disabled when viewing an export”. The viewer supports older report layouts as long as their system and score structure remains recognizable; absent optional fields keep their model defaults.
+JSON retains the `system`, `hardware`, `security`, `defender`, `antivirus`, `firewall`, `storage`, `network`, `hardening`, `services`, `registryFindings`, `directoryFindings`, `persistence`, `windowsUpdate`, and `score` report data. Native boolean readings must be interpreted with their accompanying status fields. Warnings are omitted from exports and disabled in the backup viewer. The viewer explicitly displays “Warnings are disabled when viewing an export”. Only versioned compact exports are supported by the viewer; descriptive and legacy plain-text JSON is intentionally rejected. See [JSON_FORMAT.md](JSON_FORMAT.md) for the encoding contract.
 
 ## Console and warnings
 
@@ -104,7 +105,7 @@ ctest --test-dir build-tests -C Release --output-on-failure
 python tests/smoke.py build-tests/Release
 ```
 
-Native fixtures use private temporary files and registry data. They cover parsing, ownership, rule boundaries, partial readings, score sums, antivirus fallback, hidden console fields, and JSON save/view behavior. Smoke checks cover file export, automatic filenames, viewer round trips, no-overwrite behavior, invalid arguments, legacy CLI compatibility, removed application inventory, help, and redirected console output.
+Native fixtures use private temporary files and registry data. They cover parsing, ownership, rule boundaries, partial readings, score sums, antivirus fallback, hidden console fields, and JSON save/view behavior. Smoke checks cover file export, automatic filenames, compact viewer round trips, numeric states, readable-file rejection, interactive choices, no-overwrite behavior, invalid arguments, legacy CLI compatibility, removed application inventory, help, and redirected console output.
 
 Optional MSVC `/analyze` and AddressSanitizer builds can check static and memory errors. The previous review passed Debug/Release regressions, live non-admin smoke runs, static analysis, and AddressSanitizer; elevated TPM/BitLocker provider collection was not run live. Synthetic tests cover how those provider results affect scoring.
 
@@ -112,4 +113,10 @@ Set `SA_TRACE_TIMINGS=1` to emit per-collector durations to stderr. Prior measur
 
 ## Local archive
 
-`archived/ApplicationCollector.cpp` and `archived/ApplicationCollector.h` preserve the removed collector locally. `/archived/` is ignored by Git and is outside the build source tree; builds and tests do not depend on these files. New JSON exports omit applications, and the viewer ignores application data in older exports. Removing the informational application rule does not change the 1000-point scale.
+`archived/ApplicationCollector.cpp` and `archived/ApplicationCollector.h` preserve the removed collector locally. `/archived/` is ignored by Git and is outside the build source tree; builds and tests do not depend on these files. New JSON exports omit applications, and removed application fields are not restored. Removing the informational application rule does not change the 1000-point scale.
+
+## Network sign-in policy reporting
+
+`LmCompatibilityLevel` is read directly from `HKLM\SYSTEM\CurrentControlSet\Control\Lsa`. Missing values are reported as **Not configured**, without inferring an effective default. Read failures distinguish denied access, invalid registry types, unavailable data, invalid values and general read errors. Configured levels 0–2 allow legacy responses; 3–5 send NTLMv2 responses only and receive the existing 20 points. Unsupported values never earn credit. The console and rule reasons explain missing/failed readings, which remain verification gaps in warning classification.
+
+Reference: [Microsoft's LAN Manager authentication policy documentation](https://learn.microsoft.com/windows/security/threat-protection/security-policy-settings/network-security-lan-manager-authentication-level).

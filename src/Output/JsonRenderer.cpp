@@ -338,8 +338,6 @@ std::string RenderJson(const AssessmentResult& r) {
       << ",\"inactivityStatus\":" << StatusS(hardening.inactivityStatus)
       << ",\"lmCompatibility\":" << number(hardening.lmCompatibility, hardening.lmCompatibilityStatus)
       << ",\"lmCompatibilityStatus\":" << StatusS(hardening.lmCompatibilityStatus)
-      << ",\"minimumPasswordLength\":" << number(hardening.minimumPasswordLength, hardening.passwordStatus)
-      << ",\"passwordStatus\":" << StatusS(hardening.passwordStatus)
       << ",\"lockoutThreshold\":" << number(hardening.lockoutThreshold, hardening.lockoutStatus)
       << ",\"lockoutDuration\":" << number(hardening.lockoutDuration, hardening.lockoutStatus)
       << ",\"lockoutWindow\":" << number(hardening.lockoutWindow, hardening.lockoutStatus)
@@ -426,20 +424,6 @@ std::string RenderJson(const AssessmentResult& r) {
           << ",\"command\":" << Q(e.command) << "}";
     }
     o << "],\"persistenceStatus\":" << StatusS(r.persistence.status) << ",";
-
-    // privacy
-    o << "\"privacy\":[";
-    for (size_t i = 0; i < r.privacyFindings.size(); ++i) {
-        auto& p = r.privacyFindings[i];
-        if (i) o << ",";
-        o << "{\"name\":" << Q(p.name)
-          << ",\"value\":" << Q(p.value)
-          << ",\"explanation\":" << Q(p.explanation)
-          << ",\"status\":" << StatusS(p.status)
-          << ",\"scope\":" << Q(p.scope)
-          << ",\"group\":" << Q(p.group) << "}";
-    }
-    o << "],";
 
     // score
     o << "\"score\":{"

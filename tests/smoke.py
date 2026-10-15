@@ -17,6 +17,20 @@ def run(executable, *args, cwd=None):
     return result.stdout.decode('utf-8-sig'), time.perf_counter() - started
 
 
+def export_report(app, *options):
+    with tempfile.TemporaryDirectory(prefix='sa-json-') as folder:
+        path = Path(folder) / 'saved report.json'
+        output, elapsed = run(app, '--json', str(path), *options)
+        assert output.startswith('JSON report saved to:') and not output.lstrip().startswith('{')
+        report = json.loads(path.read_text(encoding='utf-8'))
+        viewed, _ = run(app, '--json', 'view', str(path))
+        assert json.loads(viewed) == report
+        before = path.read_bytes()
+        duplicate = subprocess.run([str(app), '--json', str(path), '--no-hash'], capture_output=True, timeout=65)
+        assert duplicate.returncode == 1 and path.read_bytes() == before
+        return report, elapsed
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('binary_dir', type=Path)
@@ -28,9 +42,10 @@ def main():
     with tempfile.TemporaryDirectory(prefix='sa-smoke-', dir=binaries.parent) as scratch:
         output, _ = run(tests, cwd=scratch)
         fixture = json.loads((Path(scratch) / 'regression-output.json').read_text(encoding='utf-8'))
-        privacy_rule = next(r for r in fixture['score']['rules'] if r['id'].startswith('priv.'))
-        assert privacy_rule['id'] == 'priv.quoted "name"'
-        assert privacy_rule['reason'] == 'tabs\tand\nnewlines'
+        assert fixture['system']['productName'] == 'quoted "name"'
+        assert fixture['hardening']['lsaProtection']['reason'] == 'tabs\tand\nnewlines'
+        assert 'privacy' not in fixture
+        assert all(rule['id'] != 'acc.password' for rule in fixture['score']['rules'])
         evaluation = json.loads((Path(scratch) / 'evaluation-output.json').read_text(encoding='utf-8'))
         evaluation_rules = {rule['id']: rule for rule in evaluation['score']['rules']}
         assert evaluation_rules['os.sac']['awardedPoints'] == 25 and evaluation_rules['os.sac']['maxPoints'] == 50
@@ -72,10 +87,9 @@ def main():
     assert 'Usage:' in help_text
     invalid = subprocess.run([str(app), '--no-hahs'], capture_output=True, timeout=10)
     assert invalid.returncode == 2 and b'Unknown option:' in invalid.stderr and not invalid.stdout
-    json_text, no_hash_time = run(app, '--json', '--no-hash')
-    report = json.loads(json_text)
+    report, no_hash_time = export_report(app, '--no-hash')
     expected = {'system', 'hardware', 'security', 'defender', 'firewall', 'storage', 'network',
-                'services', 'applications', 'registryFindings', 'directoryFindings', 'persistence', 'privacy', 'score', 'windowsUpdate'}
+                'services', 'applications', 'registryFindings', 'directoryFindings', 'persistence', 'score', 'windowsUpdate'}
     assert expected <= report.keys()
     assert report['score']['maximum'] == sum(r['maxPoints'] for r in report['score']['rules']) == 1000
     assert report['score']['total'] == sum(r['awardedPoints'] for r in report['score']['rules'])
@@ -114,8 +128,7 @@ def main():
     assert len({s['name'].lower() for s in report['services']}) == len(report['services'])
     assert all(f['name'] for f in report['registryFindings'])
     assert all(not loc['sha256'] for group in report['applications'] for app_item in group['apps'] for loc in app_item['locations'])
-    hashed_text, hash_time = run(app, '--json')
-    hashed = json.loads(hashed_text)
+    hashed, hash_time = export_report(app)
     for group in hashed['applications']:
         for app_item in group['apps']:
             for loc in app_item['locations']:
@@ -133,13 +146,30 @@ def main():
     assert rules['enc.bl']['maxPoints'] == 50
     assert sum(rule['maxPoints'] for rule in rules.values() if rule['category'] == 'Network Security') == 200
     assert 'Update Services' in console and 'Pending Updates' in console
-    print(f"Smoke checks passed: JSON, hashes, help, redirected console; elevated={report['security']['elevated']}.")
+    with tempfile.TemporaryDirectory(prefix='sa-auto-json-') as folder:
+        output, _ = run(app, '--json', '--no-hash', cwd=folder)
+        generated = list(Path(folder).glob('security-assessment-*.json'))
+        assert len(generated) == 1 and output.startswith('JSON report saved to:')
+        assert json.loads(generated[0].read_text(encoding='utf-8'))['score']['maximum'] == 1000
+    for options in [('--json', 'view'), ('--json', '--json'), ('--json', 'view', 'missing.json', '--no-hash')]:
+        invalid = subprocess.run([str(app), *options], capture_output=True, timeout=10)
+        assert invalid.returncode == 2 and not invalid.stdout
+    assert 'privacy' not in report and 'minimumPasswordLength' not in report['hardening']
+    assert all(rule['id'] != 'acc.password' for rule in report['score']['rules'])
+    print(f"Smoke checks passed: JSON files/viewer, hashes, help, redirected console; elevated={report['security']['elevated']}.")
     print(f"Elapsed: --no-hash {no_hash_time:.3f}s; hashing {hash_time:.3f}s (single runs, not a benchmark).")
     if args.baseline:
-        baseline_text, elapsed = run(args.baseline.resolve(), '--json', '--no-hash')
-        baseline = json.loads(baseline_text)
-        assert baseline.keys() <= report.keys()
-        print(f"Baseline --no-hash: {elapsed:.3f}s; original report sections preserved.")
+        with tempfile.TemporaryDirectory(prefix='sa-baseline-') as folder:
+            baseline_text, elapsed = run(args.baseline.resolve(), '--json', '--no-hash', cwd=folder)
+            if baseline_text.lstrip().startswith('{'):
+                baseline = json.loads(baseline_text)
+            else:
+                exported = list(Path(folder).glob('security-assessment-*.json'))
+                assert len(exported) == 1
+                baseline = json.loads(exported[0].read_text(encoding='utf-8'))
+            assert baseline.keys() - {'privacy'} <= report.keys()
+            print(f"Baseline export: {elapsed:.3f}s; retained report sections preserved.")
+
 
 
 if __name__ == '__main__':

@@ -3,11 +3,11 @@
 #include "Collectors/ApplicationCollector.h"
 #include "Collectors/AntivirusCollector.h"
 #include "Collectors/DefenderCollector.h"
-#include "Collectors/PrivacyCollector.h"
 #include <ranges>
 #include <algorithm>
 #include "Collectors/PersistenceCollector.h"
 #include "Output/JsonRenderer.h"
+#include "Output/JsonFile.h"
 #include "Output/ConsoleRenderer.h"
 #include "Security/ScoreEngine.h"
 #include "WmiHelper.h"
@@ -175,8 +175,8 @@ static void TestScoreAndJson() {
                           &hardening.guestDisabled, &hardening.remoteAssistanceDisabled}) {
         setting->status = Status::Success; setting->enabled = Tri::Yes;
     }
-    hardening.inactivityStatus = hardening.lmCompatibilityStatus = hardening.passwordStatus = hardening.lockoutStatus = Status::Success;
-    hardening.inactivitySeconds = 900; hardening.lmCompatibility = 5; hardening.minimumPasswordLength = 12;
+    hardening.inactivityStatus = hardening.lmCompatibilityStatus = hardening.lockoutStatus = Status::Success;
+    hardening.inactivitySeconds = 900; hardening.lmCompatibility = 5;
     hardening.lockoutThreshold = 10; hardening.lockoutDuration = hardening.lockoutWindow = 900;
     auto healthy = ComputeScore(result);
     Check(healthy.total == 1000 && healthy.maximum == 1000, "fully satisfied rules retain 1000-point scale");
@@ -219,8 +219,8 @@ static void TestScoreAndJson() {
     Check(Rule(ComputeScore(result), "net.in").awardedPoints == 0, "unknown firewall action must not count as blocked");
     s.virt.runningServicesKnown = false;
     Check(Rule(ComputeScore(result), "hw.hvci").state == "Unknown", "configured HVCI is not running evidence");
-    result.privacyFindings.push_back({L"quoted \"name\"", L"C:\\path\nnext", Category::Privacy,
-        Severity::Informational, L"tabs\tand\nnewlines"});
+    result.os.productName = L"quoted \"name\"";
+    result.hardening.lsaProtection.reason = L"tabs\tand\nnewlines";
     result.score = ComputeScore(result);
     const auto json = RenderJson(result);
     Check(json.find("quoted \\\"name\\\"") != std::string::npos, "score strings are JSON escaped");
@@ -511,25 +511,19 @@ static void TestHardeningAndWarnings() {
     Check(std::ranges::all_of(score.warnings, [](const auto& warning) { return warning.verificationOnly && warning.severity == Severity::Low; }),
           "missing data produce verification gaps rather than vulnerability claims");
     auto& hardening = result.hardening;
-    hardening.passwordStatus = hardening.lockoutStatus = Status::Success;
-    hardening.minimumPasswordLength = 12;
+    hardening.lockoutStatus = Status::Success;
     hardening.lockoutThreshold = 10; hardening.lockoutDuration = hardening.lockoutWindow = 900;
-    Check(Rule(ComputeScore(result), "acc.password").awardedPoints == 20 && Rule(ComputeScore(result), "acc.lockout").awardedPoints == 20,
-          "verified local password and lockout policies earn their exact weights");
-    for (const auto minimum : {0u, 7u, 8u, 11u, 12u, 128u}) {
-        hardening.minimumPasswordLength = minimum;
-        Check(Rule(ComputeScore(result), "acc.password").awardedPoints == (minimum >= 12 ? 20 : minimum >= 8 ? 10 : 0),
-              "password length scoring covers threshold boundaries");
-    }
+    Check(Rule(ComputeScore(result), "acc.lockout").awardedPoints == 25,
+          "verified local lockout policy earns its exact weight");
     for (const auto attempts : {0u, 1u, 10u, 11u, MAXDWORD}) {
         hardening.lockoutThreshold = attempts;
-        Check(Rule(ComputeScore(result), "acc.lockout").awardedPoints == (attempts >= 1 && attempts <= 10 ? 20 : 0),
+        Check(Rule(ComputeScore(result), "acc.lockout").awardedPoints == (attempts >= 1 && attempts <= 10 ? 25 : 0),
               "lockout attempt thresholds do not overflow or reward disabled lockout");
     }
     hardening.lockoutThreshold = 5; hardening.lockoutDuration = 899;
-    Check(Rule(ComputeScore(result), "acc.lockout").awardedPoints == 10, "short lockout receives partial credit");
+    Check(Rule(ComputeScore(result), "acc.lockout").awardedPoints == 12, "short lockout receives partial credit");
     hardening.lockoutDuration = MAXDWORD;
-    Check(Rule(ComputeScore(result), "acc.lockout").awardedPoints == 20, "administrator-only unlocking qualifies for lockout duration");
+    Check(Rule(ComputeScore(result), "acc.lockout").awardedPoints == 25, "administrator-only unlocking qualifies for lockout duration");
     hardening.lsaProtection.enabled = Tri::Yes; hardening.lsaProtection.status = Status::AccessDenied;
     Check(Rule(ComputeScore(result), "os.lsa").awardedPoints == 0, "unreadable LSA status cannot earn stale credit");
     hardening.guestDisabled.status = Status::Success; hardening.guestDisabled.enabled = Tri::No;
@@ -556,38 +550,30 @@ static void TestHardeningAndWarnings() {
           "console distinguishes critical findings from unverified coverage");
     std::ofstream("warnings-output.json", std::ios::binary) << RenderJson(result);
 }
-static void TestPrivacySources(Fixture& fixture) {
-    RegKey machine, user;
-    Check(::RegCreateKeyExW(fixture.key.get(), L"PrivacyMachine", 0, nullptr, REG_OPTION_VOLATILE, KEY_ALL_ACCESS, nullptr, machine.put(), nullptr) == ERROR_SUCCESS,
-          "create isolated machine privacy source");
-    Check(::RegCreateKeyExW(fixture.key.get(), L"PrivacyUser", 0, nullptr, REG_OPTION_VOLATILE, KEY_ALL_ACCESS, nullptr, user.put(), nullptr) == ERROR_SUCCESS,
-          "create isolated user privacy source");
-    auto set = [](HKEY root, const wchar_t* path, const wchar_t* name, DWORD value) {
-        RegKey key;
-        Check(::RegCreateKeyExW(root, path, 0, nullptr, REG_OPTION_VOLATILE, KEY_ALL_ACCESS, nullptr, key.put(), nullptr) == ERROR_SUCCESS,
-              "create private privacy setting");
-        Check(::RegSetValueExW(key.get(), name, 0, REG_DWORD, reinterpret_cast<const BYTE*>(&value), sizeof(value)) == ERROR_SUCCESS,
-              "write private privacy setting");
-    };
-    auto find = [](const std::vector<PrivacyFinding>& findings, const wchar_t* name) -> const PrivacyFinding& {
-        const auto item = std::ranges::find(findings, std::wstring(name), &PrivacyFinding::name);
-        Check(item != findings.end(), "privacy setting remains present"); return *item;
-    };
-    auto readings = CollectPrivacyFindings(machine.get(), user.get());
-    Check(find(readings, L"Advertising ID").status == Status::NotFound, "absent privacy settings stay not configured");
-    set(user.get(), LR"(SOFTWARE\Microsoft\Windows\CurrentVersion\AdvertisingInfo)", L"Enabled", 1);
-    set(machine.get(), LR"(SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo)", L"DisabledByGroupPolicy", 1);
-    readings = CollectPrivacyFindings(machine.get(), user.get());
-    Check(find(readings, L"Advertising ID").value == L"Disabled" && find(readings, L"Advertising ID").scope == L"Device policy",
-          "policy restriction overrides an enabled user advertising preference");
-    set(machine.get(), LR"(SOFTWARE\Policies\Microsoft\Windows\AppPrivacy)", L"LetAppsAccessCamera", 2);
-    set(machine.get(), LR"(SOFTWARE\Policies\Microsoft\Windows\DataCollection)", L"AllowTelemetry", 4);
-    readings = CollectPrivacyFindings(machine.get(), user.get());
-    Check(find(readings, L"Camera access").value == L"Deny", "camera policy default remains enforced");
-    Check(find(readings, L"Diagnostic data level").status == Status::Error, "invalid diagnostic levels do not become a valid default");
-    set(machine.get(), LR"(SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo)", L"DisabledByGroupPolicy", 7);
-    readings = CollectPrivacyFindings(machine.get(), user.get());
-    Check(find(readings, L"Advertising ID").status == Status::Error, "invalid restriction cannot silently fall back to a user preference");
+static void TestJsonFiles(Fixture& fixture) {
+    AssessmentResult result;
+    result.os.productName = L"quoted \"name\" with [braces] and \\slashes";
+    result.score = ComputeScore(result);
+    const auto text = RenderJson(result);
+    const auto path = fixture.dir / L"saved report \u03a9.json";
+    const auto saved = SaveJsonReport(text, path);
+    Check(saved.has_value() && fs::exists(path), "save JSON to a Unicode path with spaces");
+    const auto viewed = ReadJsonReport(path);
+    Check(viewed.has_value() && viewed->find(L"quoted") != std::wstring::npos && viewed->find(L"\n  \"system\"") != std::wstring::npos,
+          "native Windows parser validates and formats a saved report");
+    Check(!SaveJsonReport("replacement", path), "exports do not overwrite existing files");
+    Check(fs::file_size(path) == text.size() + 1, "failed overwrite preserves original file");
+    Check(!SaveJsonReport(text, fixture.dir / L"missing" / L"report.json"), "unavailable output directories fail clearly");
+    Check(!ReadJsonReport(fixture.dir / L"missing.json"), "missing reports cannot be viewed");
+    const auto bad = fixture.dir / L"bad.json";
+    for (const auto* invalid : {"", "{\"system\":", "[]", "{}", "{\"system\":{},\"score\":{\"rules\":[],\"total\":101,\"maximum\":100}}", "\xff\xfe"}) {
+        std::ofstream(bad, std::ios::binary) << invalid;
+        Check(!ReadJsonReport(bad), "empty, malformed, non-report and invalid UTF-8 files are rejected");
+    }
+    std::ofstream(bad, std::ios::binary) << text << '\0';
+    Check(!ReadJsonReport(bad), "raw NUL characters cannot hide trailing report data");
+    std::ofstream(bad, std::ios::binary) << "\xef\xbb\xbf" << text;
+    Check(ReadJsonReport(bad).has_value(), "UTF-8 BOM reports remain viewable");
 }
 
 int main() {
@@ -601,7 +587,7 @@ int main() {
         TestWindowsUpdate();
         TestPartialCollection();
         TestHardeningAndWarnings();
-        TestPrivacySources(fixture);
+        TestJsonFiles(fixture);
         TestComAndWmi();
         std::cout << "All native regressions passed.\n";
         return 0;

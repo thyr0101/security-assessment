@@ -19,7 +19,7 @@ enum class Severity { Informational, Low, Medium, High, Critical };
 
 enum class Category {
     HardwareSecurity, OsSecurity, WindowsUpdate, MalwareProtection, NetworkSecurity,
-    Encryption, AccountSecurity, Privacy, Hardening, SoftwareHygiene, Informational
+    Encryption, AccountSecurity, Hardening, SoftwareHygiene, Informational
 };
 
 inline const wchar_t* ToW(Status s) {
@@ -61,7 +61,6 @@ inline const wchar_t* ToW(Category c) {
     case Category::NetworkSecurity:   return L"Network Security";
     case Category::Encryption:        return L"Encryption";
     case Category::AccountSecurity:   return L"Account Security";
-    case Category::Privacy:           return L"Privacy";
     case Category::Hardening:         return L"Hardening";
     case Category::SoftwareHygiene:   return L"Software Hygiene";
     case Category::Informational:     return L"Informational";

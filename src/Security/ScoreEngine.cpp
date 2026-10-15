@@ -62,13 +62,12 @@ void BuildWarnings(const AssessmentResult& assessment, ScoreReport& report) {
         {"net.smb.sign.client", Severity::High, "Require signing for outgoing SMB connections after checking compatibility."},
         {"net.smb.guest", Severity::High, "Use authenticated SMB access and block insecure guest logons."},
         {"net.rdp", Severity::High, "Require Network Level Authentication for RDP, or disable RDP when unused."},
-        {"net.ntlm", Severity::High, "Review LAN Manager authentication policy and require NTLMv2-only responses where compatible."},
+        {"net.ntlm", Severity::High, "Use modern network sign-in responses and check compatibility with older devices."},
         {"enc.bl", Severity::High, "Review unprotected fixed volumes and enable BitLocker where appropriate; retain recovery keys."},
         {"os.uac", Severity::High, "Enable User Account Control."},
-        {"os.lsa", Severity::High, "Enable supported LSA protection and confirm LSASS runs as a protected process."},
-        {"os.lmhash", Severity::High, "Block LM hash storage; existing account passwords must change before this policy removes old LM hashes."},
+        {"os.lsa", Severity::High, "Enable protection for the Windows sign-in service and confirm that it is running in protected mode."},
+        {"os.lmhash", Severity::High, "Disable old password-hash storage; this takes effect when existing account passwords change."},
         {"acc.guest", Severity::High, "Disable the built-in Guest account if it is not explicitly required."},
-        {"acc.password", Severity::Medium, "Review the local account policy and require passwords of at least 12 characters."},
         {"acc.lockout", Severity::Medium, "Use a local account lockout threshold of 1-10 attempts with lockout/reset windows of at least 15 minutes."},
         {"acc.securedesktop", Severity::Medium, "Require UAC prompts on the secure desktop."},
         {"acc.assistance", Severity::Low, "Block solicited Remote Assistance invitations when the feature is unused."},
@@ -125,7 +124,7 @@ void BuildWarnings(const AssessmentResult& assessment, ScoreReport& report) {
 ScoreReport ComputeScore(const AssessmentResult& a) {
     ScoreReport rep;
     rep.maximum = 1000;
-    rep.rules.reserve(64 + a.privacyFindings.size());
+    rep.rules.reserve(64);
 
     auto& S = a.security;
     auto& D = a.defender;
@@ -144,15 +143,15 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
     if (S.tpm.present && S.tpm.ready) {
         const bool v2 = Trim(Split(S.tpm.specVersion, L',').front()) == L"2.0";
         rep.rules.push_back(v2
-            ? Full({ "hw.tpm2", "TPM 2.0 security chip ready", 30, Category::HardwareSecurity }, "TPM 2.0 is present and ready.", "Ready")
-            : Partial({ "hw.tpm2", "TPM 2.0 security chip ready", 30, Category::HardwareSecurity }, 15,
+            ? Full({ "hw.tpm2", "Security chip ready (TPM 2.0)", 30, Category::HardwareSecurity }, "TPM 2.0 is present and ready.", "Ready")
+            : Partial({ "hw.tpm2", "Security chip ready (TPM 2.0)", 30, Category::HardwareSecurity }, 15,
                       "Version unverified", "TPM is ready, but version 2.0 could not be confirmed."));
     } else if (S.tpm.present) {
-        rep.rules.push_back(Partial({ "hw.tpm2", "TPM 2.0 security chip ready", 30, Category::HardwareSecurity },
+        rep.rules.push_back(Partial({ "hw.tpm2", "Security chip ready (TPM 2.0)", 30, Category::HardwareSecurity },
                                     15, S.tpm.readinessKnown ? "Not ready" : "Readiness unknown",
                                     "TPM presence is confirmed; readiness is not confirmed."));
     } else {
-        rep.rules.push_back(Zero({ "hw.tpm2", "TPM 2.0 security chip ready", 30, Category::HardwareSecurity },
+        rep.rules.push_back(Zero({ "hw.tpm2", "Security chip ready (TPM 2.0)", 30, Category::HardwareSecurity },
                                  S.tpm.status == Status::Unavailable ? "Unavailable" : "Absent",
                                  "No usable TPM detected."));
     }
@@ -174,18 +173,18 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
         : Zero({ "hw.nx", "CPU memory protection (NX/XD)", 0, Category::HardwareSecurity }, "Absent", "NX/XD not reported."));
 
     if (S.virt.vbsEnabled)
-        rep.rules.push_back(Full({ "hw.vbs", "Virtualization security (VBS)", 30, Category::HardwareSecurity },
+        rep.rules.push_back(Full({ "hw.vbs", "Security features isolated from Windows", 30, Category::HardwareSecurity },
                                  "Windows uses virtualization to isolate security functions.", "Running"));
     else
-        rep.rules.push_back(Zero({ "hw.vbs", "Virtualization security (VBS)", 30, Category::HardwareSecurity },
+        rep.rules.push_back(Zero({ "hw.vbs", "Security features isolated from Windows", 30, Category::HardwareSecurity },
                                  S.virt.deviceGuardAvailable ? "Not running" : "Unknown",
                                  "VBS not detected as running."));
 
     if (S.virt.hvciEnabled)
-        rep.rules.push_back(Full({ "hw.hvci", "Memory integrity (HVCI)", 30, Category::HardwareSecurity },
+        rep.rules.push_back(Full({ "hw.hvci", "Memory integrity protection", 30, Category::HardwareSecurity },
                                  "Memory integrity protects Windows kernel code using virtualization.", "Running"));
     else
-        rep.rules.push_back(Zero({ "hw.hvci", "Memory integrity (HVCI)", 30, Category::HardwareSecurity }, "Disabled",
+        rep.rules.push_back(Zero({ "hw.hvci", "Memory integrity protection", 30, Category::HardwareSecurity }, "Disabled",
                                  "HVCI is not enabled."));
 
     // ---- OS Security (max 200) ----
@@ -203,17 +202,17 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
                                  "UAC is disabled."));
 
     if (S.dep.depEnabled == Tri::Yes)
-        rep.rules.push_back(Full({ "os.dep", "Data Execution Prevention (DEP)", 20, Category::OsSecurity },
+        rep.rules.push_back(Full({ "os.dep", "Code execution blocked in data memory", 20, Category::OsSecurity },
                                  "Data Execution Prevention is active."));
     else
-        rep.rules.push_back(Zero({ "os.dep", "Data Execution Prevention (DEP)", 20, Category::OsSecurity }, "Disabled",
+        rep.rules.push_back(Zero({ "os.dep", "Code execution blocked in data memory", 20, Category::OsSecurity }, "Disabled",
                                  "DEP is not enforced."));
 
     if (S.dep.sehopEnabled == Tri::Yes)
-        rep.rules.push_back(Full({ "os.sehop", "Memory overwrite protection (SEHOP)", 15, Category::OsSecurity },
+        rep.rules.push_back(Full({ "os.sehop", "Protection against memory overwrite attacks", 15, Category::OsSecurity },
                                  "Windows protects exception handling data against memory overwrite attacks."));
     else
-        rep.rules.push_back(Zero({ "os.sehop", "Memory overwrite protection (SEHOP)", 15, Category::OsSecurity },
+        rep.rules.push_back(Zero({ "os.sehop", "Protection against memory overwrite attacks", 15, Category::OsSecurity },
                                  S.dep.sehopEnabled == Tri::Unknown ? "Unknown" : "Disabled",
                                  "SEHOP is not enabled."));
 
@@ -408,17 +407,17 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
             : Zero(rule, known ? fail : setting.status == Status::NotFound ? "Not configured" : "Unknown",
                 known ? explanation : "The required configuration could not be verified; no default is assumed."));
     };
-    settingRule("net.smb1.server", "Legacy SMB1 server disabled", N.smb1Server, false, "Disabled", "Enabled",
+    settingRule("net.smb1.server", "Old file-sharing server disabled (SMB1)", N.smb1Server, false, "Disabled", "Enabled",
         "SMB1 server configuration; disabling this legacy protocol reduces file-sharing attack surface.");
-    settingRule("net.smb1.client", "Legacy SMB1 client disabled", N.smb1Client, false, "Disabled", "Available",
+    settingRule("net.smb1.client", "Old file-sharing client disabled (SMB1)", N.smb1Client, false, "Disabled", "Available",
         "SMB1 client driver availability; an absent or disabled redirector cannot be used for legacy SMB1 connections.");
-    settingRule("net.smb.sign.server", "Incoming SMB signing required", N.smbServerSigning, true, "Required", "Not required",
+    settingRule("net.smb.sign.server", "Incoming file-sharing integrity checks", N.smbServerSigning, true, "Required", "Not required",
         "Requiring SMB server signing protects the integrity of incoming file-sharing traffic.");
-    settingRule("net.smb.sign.client", "Outgoing SMB signing required", N.smbClientSigning, true, "Required", "Not required",
+    settingRule("net.smb.sign.client", "Outgoing file-sharing integrity checks", N.smbClientSigning, true, "Required", "Not required",
         "Requiring SMB client signing protects the integrity of outgoing file-sharing traffic.");
-    settingRule("net.smb.guest", "Unauthenticated SMB guest blocked", N.smbGuestLogons, false, "Blocked", "Allowed",
+    settingRule("net.smb.guest", "Outgoing file sharing requires sign-in", N.smbGuestLogons, false, "Blocked", "Allowed",
         "Insecure guest logons bypass normal SMB authentication.");
-    settingRule("net.llmnr", "LLMNR disabled by policy", N.llmnr, false, "Disabled", "Allowed",
+    settingRule("net.llmnr", "Local name-lookup fallback disabled", N.llmnr, false, "Disabled", "Allowed",
         "Disabling multicast name-resolution fallback reduces local name-spoofing opportunities.");
     bool haveAdapter = false, netbiosUnknown = N.status != Status::Success;
     bool netbiosEnabled = false, netbiosDhcp = false;
@@ -429,7 +428,7 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
         else if (adapter.netbiosOptions == 1) netbiosEnabled = true;
         else if (adapter.netbiosOptions == 0) netbiosDhcp = true;
     }
-    const R netbios{"net.netbios", "NetBIOS off on active IPv4 adapters", 10, Category::NetworkSecurity};
+    const R netbios{"net.netbios", "Old network discovery disabled", 10, Category::NetworkSecurity};
     rep.rules.push_back(netbiosUnknown ? Zero(netbios, "Unknown", "Not every applicable adapter's NetBIOS configuration could be read.")
         : netbiosEnabled ? Zero(netbios, "Enabled", "At least one active IPv4 adapter explicitly enables NetBIOS.")
         : netbiosDhcp ? Zero(netbios, "DHCP controlled", "DHCP-controlled settings do not prove NetBIOS is disabled.")
@@ -524,11 +523,11 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
     SecuritySetting guard;
     guard.status = S.virt.status == Status::Success && S.virt.runningServicesKnown ? Status::Success : Status::Unavailable;
     if (guard.status == Status::Success) guard.enabled = S.virt.credentialGuardRunning ? Tri::Yes : Tri::No;
-    protection("hw.credentialguard", "Credential Guard", 20, Category::HardwareSecurity, guard,
+    protection("hw.credentialguard", "Sign-in secrets isolated (Credential Guard)", 20, Category::HardwareSecurity, guard,
         "Running", "Not running", "Credential Guard isolates sign-in secrets using virtualization.");
-    protection("os.lsa", "LSA process protection", 25, Category::OsSecurity, H.lsaProtection,
+    protection("os.lsa", "Sign-in service protected from tampering", 25, Category::OsSecurity, H.lsaProtection,
         "Protected", "Unprotected", "Reports the running LSASS process protection level, not merely a registry configuration.");
-    protection("os.lmhash", "Legacy LM hash storage blocked", 20, Category::OsSecurity, H.noLmHash,
+    protection("os.lmhash", "Old password storage disabled", 20, Category::OsSecurity, H.noLmHash,
         "Blocked", "Allowed", "NoLMHash prevents LM hashes being stored at the next password change; it does not prove older hashes were removed.");
     protection("os.autoplay", "AutoPlay off on all drive types", 20, Category::OsSecurity, H.autoPlayDisabled,
         "Blocked", "Not blocked", "The device AutoPlay policy must cover all drive types.");
@@ -537,46 +536,28 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
         ? Full(lock, "An explicit device inactivity policy locks sessions within 15 minutes.", "Configured")
         : Zero(lock, H.inactivityStatus == Status::Success ? (H.inactivitySeconds ? "Long timeout" : "Not configured") : "Unknown",
             "Checks the device inactivity policy; user screen-saver policies can impose additional locking."));
-    const R ntlm{"net.ntlm", "NTLMv2-only logon policy", 20, Category::NetworkSecurity};
+    const R ntlm{"net.ntlm", "Modern network sign-in protection", 20, Category::NetworkSecurity};
     rep.rules.push_back(H.lmCompatibilityStatus == Status::Success && H.lmCompatibility >= 3 && H.lmCompatibility <= 5
-        ? Full(ntlm, "The configured LAN Manager level sends NTLMv2 responses only; higher levels further restrict acceptance on domain controllers.", "NTLMv2 only")
+        ? Full(ntlm, "The configured LAN Manager level sends NTLMv2 responses only; higher levels further restrict acceptance on domain controllers.", "Modern responses only")
         : Zero(ntlm, H.lmCompatibilityStatus == Status::Success ? "Legacy allowed" : "Unknown",
             "Checks an explicit LAN Manager authentication level; an absent value does not prove legacy authentication is active."));
     SecuritySetting desktop;
     desktop.status = S.uac.status;
     if (desktop.status == Status::Success && S.uac.promptOnSecureDesktop <= 1)
         desktop.enabled = S.uac.enabled && S.uac.promptOnSecureDesktop == 1 ? Tri::Yes : Tri::No;
-    protection("acc.securedesktop", "UAC prompts use the secure desktop", 20, Category::AccountSecurity, desktop,
+    protection("acc.securedesktop", "UAC prompts use the secure desktop", 25, Category::AccountSecurity, desktop,
         "Required", "Not required", "UAC prompts should run on the isolated secure desktop.");
-    protection("acc.guest", "Built-in Guest account disabled", 25, Category::AccountSecurity, H.guestDisabled,
+    protection("acc.guest", "Built-in Guest account disabled", 30, Category::AccountSecurity, H.guestDisabled,
         "Disabled", "Enabled", "Identifies the built-in Guest account by RID 501, even if it was renamed.");
-    protection("acc.assistance", "Remote Assistance invitations blocked", 15, Category::AccountSecurity, H.remoteAssistanceDisabled,
+    protection("acc.assistance", "Remote Assistance invitations blocked", 20, Category::AccountSecurity, H.remoteAssistanceDisabled,
         "Blocked", "Allowed", "Checks policy/local permission for solicited Remote Assistance invitations, not third-party remote support tools.");
-    const R password{"acc.password", "Local account minimum password length", 20, Category::AccountSecurity};
-    rep.rules.push_back(H.passwordStatus != Status::Success ? Zero(password, "Unknown", "Local SAM password policy could not be read.")
-        : H.minimumPasswordLength >= 12 ? Full(password, "The local account policy requires at least 12 characters; domain and Microsoft accounts can use different policies.", "12+ characters")
-        : H.minimumPasswordLength >= 8 ? Partial(password, 10, "8-11 characters", "The local password minimum is below 12 characters.")
-        : Zero(password, "Below 8 characters", "The local account password minimum is below 8 characters."));
-    const R lockout{"acc.lockout", "Local account lockout protection", 20, Category::AccountSecurity};
+    const R lockout{"acc.lockout", "Local account lockout protection", 25, Category::AccountSecurity};
     const bool threshold = H.lockoutThreshold > 0 && H.lockoutThreshold <= 10;
     const bool duration = H.lockoutDuration >= 900 && H.lockoutWindow >= 900;
     rep.rules.push_back(H.lockoutStatus != Status::Success ? Zero(lockout, "Unknown", "Local SAM lockout policy could not be read.")
         : threshold && duration ? Full(lockout, "Local accounts lock after 1-10 failed attempts, with a lockout and reset window of at least 15 minutes.", "Configured")
-        : threshold ? Partial(lockout, 10, "Short lockout", "The local lockout duration or reset window is shorter than 15 minutes.")
+        : threshold ? Partial(lockout, 12, "Short lockout", "The local lockout duration or reset window is shorter than 15 minutes.")
         : Zero(lockout, H.lockoutThreshold ? "High threshold" : "Not configured", "The local account lockout threshold is absent or exceeds 10 failed attempts."));
-
-    // ---- Privacy (informational; no score weight) ----
-    for (auto& p : a.privacyFindings) {
-        ScoreRuleResult s;
-        s.id = "priv." + WideToUtf8(p.name);
-        s.description = WideToUtf8(p.name);
-        s.maxPoints = 0;
-        s.awardedPoints = 0;
-        s.category = WideToUtf8(ToW(Category::Privacy));
-        s.reason = WideToUtf8(p.explanation);
-        s.state = WideToUtf8(p.value);
-        rep.rules.push_back(std::move(s));
-    }
 
     // ---- Hardening / Software Hygiene (informational) ----
     rep.rules.push_back(a.persistence.status != Status::Success

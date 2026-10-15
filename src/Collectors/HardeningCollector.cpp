@@ -60,13 +60,7 @@ struct NetDeleter { void operator()(BYTE* value) const noexcept { if (value) ::N
 using NetBuffer = std::unique_ptr<BYTE, NetDeleter>;
 void CollectAccounts(HardeningInfo& info) {
     NetBuffer policy;
-    auto result = ::NetUserModalsGet(nullptr, 0, std::out_ptr(policy));
-    info.passwordStatus = StatusFromWin32(result);
-    if (result == NERR_Success && policy)
-        info.minimumPasswordLength = reinterpret_cast<USER_MODALS_INFO_0*>(policy.get())->usrmod0_min_passwd_len;
-    else if (result == NERR_Success) info.passwordStatus = Status::Unavailable;
-
-    result = ::NetUserModalsGet(nullptr, 3, std::out_ptr(policy));
+    auto result = ::NetUserModalsGet(nullptr, 3, std::out_ptr(policy));
     info.lockoutStatus = StatusFromWin32(result);
     if (result == NERR_Success && policy) {
         const auto* lockout = reinterpret_cast<USER_MODALS_INFO_3*>(policy.get());

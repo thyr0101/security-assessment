@@ -218,7 +218,7 @@ const wchar_t* OutcomeColor(int awarded, int max) {
 void RenderConsole(const AssessmentResult& r) {
     ConsoleStyle style;
 
-    Banner(L"Windows Security & Privacy Assessment");
+    Banner(L"Windows Security Assessment");
 
     // ------------------------------------------------------------ System
     Section(L"System");
@@ -259,13 +259,13 @@ void RenderConsole(const AssessmentResult& r) {
         KV(L"Virtualization", virt ? L"Supported" : L"Unsupported", virt ? Grn() : Red());
     }
     const Status runningStatus = r.security.virt.runningServicesKnown ? Status::Success : Status::Unavailable;
-    FlagPair(L"VBS", r.security.virt.vbsEnabled, r.security.virt.status,
-             L"HVCI", r.security.virt.hvciEnabled, runningStatus);
+    FlagPair(L"Isolated security", r.security.virt.vbsEnabled, r.security.virt.status,
+             L"Memory integrity", r.security.virt.hvciEnabled, runningStatus);
     Flag(L"Credential Guard", r.security.virt.credentialGuardRunning, runningStatus);
     Pair(L"AES acceleration", r.cpu.status != Status::Success ? L"Unknown" : r.cpu.aesni ? L"Supported" : L"Unsupported",
          L"CPU memory protection", r.cpu.status != Status::Success ? L"Unknown" : r.cpu.nx ? L"Supported" : L"Unsupported", Cyn());
     if (r.security.virt.hvciConfigured != Tri::Unknown)
-        KV(L"HVCI configured", ToW(r.security.virt.hvciConfigured), Yel());
+        KV(L"Memory integrity setup", ToW(r.security.virt.hvciConfigured), Yel());
 
     // ------------------------------------------------------------ Protection
     Section(L"Protection");
@@ -364,14 +364,14 @@ void RenderConsole(const AssessmentResult& r) {
     SubHeader(L"File Sharing & Authentication", L"", Dim());
     settings({L"SMB1 server", network.smb1Server, L"Enabled", L"Disabled", false},
              {L"SMB1 client", network.smb1Client, L"Available", L"Disabled / absent", false});
-    settings({L"Incoming SMB signing", network.smbServerSigning, L"Required", L"Not required"},
-             {L"Outgoing SMB signing", network.smbClientSigning, L"Required", L"Not required"});
+    settings({L"Incoming file integrity", network.smbServerSigning, L"Required", L"Not required"},
+             {L"Outgoing file integrity", network.smbClientSigning, L"Required", L"Not required"});
     settings({L"SMB guest logons", network.smbGuestLogons, L"Allowed", L"Blocked", false},
-             {L"LLMNR policy", network.llmnr, L"Allowed", L"Disabled", false});
+             {L"Local lookup fallback", network.llmnr, L"Allowed", L"Disabled", false});
     const auto& hardening = r.hardening;
-    KV(L"LAN Manager policy", hardening.lmCompatibilityStatus != Status::Success ? L"Unknown / not configured"
-        : hardening.lmCompatibility >= 3 ? L"NTLMv2-only responses (level " + Num(hardening.lmCompatibility) + L")"
-        : L"Legacy responses allowed (level " + Num(hardening.lmCompatibility) + L")",
+    KV(L"Network sign-in", hardening.lmCompatibilityStatus != Status::Success ? L"Unknown / not configured"
+        : hardening.lmCompatibility >= 3 ? L"Modern sign-in responses only"
+        : L"Old sign-in responses allowed",
         hardening.lmCompatibilityStatus == Status::Success && hardening.lmCompatibility >= 3 ? Grn() : Yel());
     SubHeader(L"SMB Encryption & Remote Access", L"", Dim());
     settings({L"Global SMB encryption", network.smbEncryption, L"Enabled", L"Disabled", true, true},
@@ -382,8 +382,8 @@ void RenderConsole(const AssessmentResult& r) {
 
     Section(L"Device & Account Security");
     SubHeader(L"Credential & Device Protection", L"", Dim());
-    settings({L"LSA process", hardening.lsaProtection, L"Protected", L"Unprotected"},
-             {L"LM hash storage", hardening.noLmHash, L"Blocked", L"Allowed"});
+    settings({L"Sign-in service", hardening.lsaProtection, L"Protected", L"Unprotected"},
+             {L"Old password storage", hardening.noLmHash, L"Blocked", L"Allowed"});
     settings({L"AutoPlay (all drives)", hardening.autoPlayDisabled, L"Blocked", L"Not blocked"},
              {L"Assistance invitations", hardening.remoteAssistanceDisabled, L"Blocked", L"Allowed"});
     const auto unknown = [](Status status) { return status == Status::NotFound ? std::wstring(L"Not configured")
@@ -394,8 +394,8 @@ void RenderConsole(const AssessmentResult& r) {
     SubHeader(L"Local Account Policies", L"", Dim());
     FlagPair(L"UAC", r.security.uac.enabled, r.security.uac.status,
              L"UAC secure desktop", r.security.uac.enabled && r.security.uac.promptOnSecureDesktop == 1, r.security.uac.status);
-    Pair(L"Built-in Guest", settingText({L"", hardening.guestDisabled, L"Disabled", L"Enabled"}),
-         L"Minimum password", hardening.passwordStatus == Status::Success ? Num(hardening.minimumPasswordLength) + L" characters" : unknown(hardening.passwordStatus), Cyn());
+    KV(L"Built-in Guest", settingText({L"", hardening.guestDisabled, L"Disabled", L"Enabled"}),
+        settingColor({L"", hardening.guestDisabled, L"Disabled", L"Enabled"}));
     KV(L"Account lockout", hardening.lockoutStatus != Status::Success ? unknown(hardening.lockoutStatus)
         : !hardening.lockoutThreshold ? L"Not configured"
         : Num(hardening.lockoutThreshold) + L" attempts; duration " +
@@ -574,31 +574,6 @@ void RenderConsole(const AssessmentResult& r) {
         }
     }
     if (!anyDir) out() << L"  " << Grn() << L"none exceeded" << Rst() << L"\n";
-
-    // ------------------------------------------------------------ Privacy
-    Section(L"Privacy (informational)");
-    std::vector<std::wstring> privacyGroups;
-    for (const auto& finding : r.privacyFindings)
-        if (std::find(privacyGroups.begin(), privacyGroups.end(), finding.group) == privacyGroups.end())
-            privacyGroups.push_back(finding.group);
-    for (const auto& group : privacyGroups) {
-        if (!group.empty()) SubHeader(group, L"", Dim());
-        const PrivacyFinding* pending = nullptr;
-        auto text = [](const PrivacyFinding& finding) {
-            return finding.value + (finding.scope.empty() ? L"" : L" [" + finding.scope + L"]");
-        };
-        auto color = [](const PrivacyFinding& finding) {
-            return finding.status == Status::Success ? Cyn() : finding.status == Status::NotFound ? Dim() : Yel();
-        };
-        for (const auto& finding : r.privacyFindings) {
-            if (finding.group != group) continue;
-            if (!pending) { pending = &finding; continue; }
-            Pair(pending->name.c_str(), text(*pending), finding.name.c_str(), text(finding), color(*pending), color(finding));
-            pending = nullptr;
-        }
-        if (pending) KV(pending->name.c_str(), text(*pending), color(*pending));
-    }
-    KV(L"Permission scope", L"Defaults only; per-app overrides and desktop-app exceptions can apply.", Dim());
 
     // ------------------------------------------------------------ Rule breakdown
     out() << L"\n  " << Dim() << L"Rule breakdown (awarded / max)" << Rst() << L"\n";

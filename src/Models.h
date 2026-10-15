@@ -319,8 +319,6 @@ struct HardeningInfo {
     Status inactivityStatus = Status::Unavailable;
     DWORD lmCompatibility = 0;
     Status lmCompatibilityStatus = Status::Unavailable;
-    DWORD minimumPasswordLength = 0;
-    Status passwordStatus = Status::Unavailable;
     DWORD lockoutThreshold = 0, lockoutDuration = 0, lockoutWindow = 0;
     Status lockoutStatus = Status::Unavailable;
 };
@@ -430,17 +428,6 @@ struct DirectoryFinding {
     Status status = Status::Error;
 };
 
-struct PrivacyFinding {
-    std::wstring name;
-    std::wstring value;
-    Category category = Category::Privacy;
-    Severity severity = Severity::Informational;
-    std::wstring explanation;
-    Status status = Status::Unavailable;
-    std::wstring scope;
-    std::wstring group;
-};
-
 struct PersistenceEntry {
     std::wstring location;   // e.g. "HKCU\\...\\Run"
     std::wstring name;
@@ -497,7 +484,6 @@ struct AssessmentResult {
     std::vector<ApplicationFinding> applications;
     std::vector<RegistryFinding> registryFindings;
     std::vector<DirectoryFinding> directoryFindings;
-    std::vector<PrivacyFinding> privacyFindings;
     PersistenceReport persistence;
     ScoreReport score;
 };

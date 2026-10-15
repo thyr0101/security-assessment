@@ -21,12 +21,12 @@
 #include "Collectors/HardeningCollector.h"
 #include "Collectors/StorageCollector.h"
 #include "Collectors/ApplicationCollector.h"
-#include "Collectors/PrivacyCollector.h"
 #include "Collectors/PersistenceCollector.h"
 #include "Collectors/WindowsUpdateCollector.h"
 #include "Security/ScoreEngine.h"
 #include "Output/ConsoleRenderer.h"
 #include "Output/JsonRenderer.h"
+#include "Output/JsonFile.h"
 
 using namespace sa;
 
@@ -58,31 +58,43 @@ int wmain(int argc, wchar_t** argv) {
         ~ConsoleCodePage() { if (changed) ::SetConsoleOutputCP(original); }
     } consoleCodePage;
 
-    bool json = false;
-    bool noHash = false;
+    constexpr auto usage = L"Usage: SecurityAssessment [--no-hash] [--json [output-file]]\n"
+        L"       SecurityAssessment --json view <report-file>\n";
+    bool json = false, viewJson = false, noHash = false;
+    std::filesystem::path jsonPath;
+    auto invalid = [&](const wchar_t* reason) {
+        std::wcerr << reason << L"\n" << usage;
+        return 2;
+    };
     for (int i = 1; i < argc; ++i) {
-        std::wstring a = argv[i];
-        if (a == L"--json")      json = true;
-        else if (a == L"--no-hash") noHash = true;
-        else if (a == L"--help" || a == L"-h") {
-            std::wcout << L"Usage: SecurityAssessment [--json] [--no-hash]\n";
+        const std::wstring_view argument = argv[i];
+        if (argument == L"--json") {
+            if (json) return invalid(L"Specify --json only once.");
+            json = true;
+            if (i + 1 < argc && std::wstring_view(argv[i + 1]) == L"view") {
+                viewJson = true;
+                ++i;
+                if (i + 1 >= argc || std::wstring_view(argv[i + 1]).starts_with(L"-"))
+                    return invalid(L"The JSON viewer requires a report filename.");
+                jsonPath = argv[++i];
+            } else if (i + 1 < argc && !std::wstring_view(argv[i + 1]).starts_with(L"-")) {
+                jsonPath = argv[++i];
+            }
+        } else if (argument == L"--no-hash") noHash = true;
+        else if (argument == L"--help" || argument == L"-h") {
+            std::wcout << usage;
             return 0;
-        }
-        else {
-            std::wcerr << L"Unknown option: " << a << L"\n"
-                       << L"Usage: SecurityAssessment [--json] [--no-hash]\n";
-            return 2;
-        }
+        } else return invalid((L"Unknown option: " + std::wstring(argument)).c_str());
     }
-
-    // Choose the stream mode ONCE, before any I/O on stdout.
-    // Mixing std::cout (char) with a stream in _O_U8TEXT mode is what
-    // tripped the UCRT fputc assertion.
-    if (json) {
-        if (_setmode(_fileno(stdout), _O_BINARY) == -1) return 1; // UTF-8 JSON bytes
-    }
-    else {
-        if (_setmode(_fileno(stdout), _O_U8TEXT) == -1) return 1; // wide stream -> UTF-8
+    if (viewJson && noHash) return invalid(L"--no-hash applies to assessment, not to viewing a saved report.");
+    // Both the report and file/view confirmations use wide UTF-8 console output.
+    if (_setmode(_fileno(stdout), _O_U8TEXT) == -1) return 1;
+    if (viewJson) {
+        const auto saved = ReadJsonReport(jsonPath);
+        if (!saved) { std::wcerr << saved.error() << L"\n"; return 1; }
+        std::wcout << *saved;
+        std::wcout.flush();
+        return std::wcout ? 0 : 1;
     }
 
     ComInit ci; // The main thread and every collector worker initialize COM separately.
@@ -155,10 +167,6 @@ int wmain(int argc, wchar_t** argv) {
             catch (...) {}
         },
         [&] {
-            try { r.privacyFindings = Timed(L"privacyFindings", [&] { return CollectPrivacyFindings(); }); }
-            catch (...) {}
-        },
-        [&] {
             try { r.persistence = Timed(L"persistence", [&] { return CollectPersistence(); }); }
             catch (...) {}
         }
@@ -183,10 +191,11 @@ int wmain(int argc, wchar_t** argv) {
     catch (...) { r.score.total = 0; }
 
     if (json) {
-        std::string out = RenderJson(r);
-        std::cout << out << "\n";
-        std::cout.flush();
-        if (!std::cout) return 1;
+        const auto saved = SaveJsonReport(RenderJson(r), jsonPath);
+        if (!saved) { std::wcerr << saved.error() << L"\n"; return 1; }
+        std::wcout << L"JSON report saved to: " << saved->wstring() << L"\n";
+        std::wcout.flush();
+        if (!std::wcout) return 1;
     }
     else {
         RenderConsole(r);

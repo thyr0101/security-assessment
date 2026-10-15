@@ -71,3 +71,6 @@ Testing/
 
 /Security*/
 /.vs/
+
+# Locally generated assessment reports
+/security-assessment-*.json

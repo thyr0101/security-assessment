@@ -93,6 +93,7 @@
     <ClInclude Include="src\Output\ConsoleRenderer.h" />
     <ClInclude Include="src\Output\JsonRenderer.h" />
     <ClInclude Include="src\Output\JsonFile.h" />
+    <ClInclude Include="src\Output\JsonReportReader.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

@@ -1,4 +1,5 @@
 #include "JsonFile.h"
+#include "JsonReportReader.h"
 #include "../Utilities.h"
 #include <windows.data.json.h>
 #include <wrl/client.h>
@@ -15,7 +16,6 @@ using Microsoft::WRL::ComPtr;
 using Microsoft::WRL::Wrappers::HString;
 using Microsoft::WRL::Wrappers::HStringReference;
 constexpr size_t kInputLimit = 64u << 20;
-constexpr size_t kDisplayLimit = 128u << 20;
 
 std::unexpected<std::wstring> Error(std::wstring text) { return std::unexpected(std::move(text)); }
 std::filesystem::path DefaultName() {
@@ -37,50 +37,20 @@ bool ReportShape(ABI::Windows::Data::Json::IJsonObject* root) {
         std::isfinite(total) && std::isfinite(maximum) && total >= 0 && maximum > 0 && total <= maximum &&
         std::floor(total) == total && std::floor(maximum) == maximum;
 }
-std::expected<std::wstring, std::wstring> Pretty(std::wstring_view source) {
-    std::wstring output;
-    output.reserve(source.size());
+// Limit nesting before handing input to the native parser.
+bool SafeDepth(std::wstring_view source) {
     size_t depth = 0;
     bool quoted = false, escaped = false;
-    wchar_t previous = 0;
-    auto space = [](wchar_t c) { return c == L' ' || c == L'\t' || c == L'\r' || c == L'\n'; };
-    auto newline = [&] { output += L'\n'; output.append(depth * 2, L' '); };
-    for (size_t i = 0; i < source.size(); ++i) {
-        const wchar_t c = source[i];
+    for (const auto c : source) {
         if (quoted) {
-            output += c;
             if (escaped) escaped = false;
             else if (c == L'\\') escaped = true;
-            else if (c == L'"') { quoted = false; previous = c; }
-        } else {
-            if (space(c)) continue;
-            switch (c) {
-            case L'"': quoted = true; output += c; break;
-            case L'{': case L'[': {
-                if (++depth > 128) return Error(L"The report exceeds the viewer's nesting limit (128).");
-                output += c;
-                size_t next = i + 1;
-                while (next < source.size() && space(source[next])) ++next;
-                const wchar_t close = c == L'{' ? L'}' : L']';
-                if (next == source.size() || source[next] != close) newline();
-                break;
-            }
-            case L'}': case L']':
-                if (!depth) return Error(L"Invalid JSON structure.");
-                --depth;
-                if (previous != (c == L'}' ? L'{' : L'[')) newline();
-                output += c;
-                break;
-            case L',': output += c; newline(); break;
-            case L':': output += L": "; break;
-            default: output += c; break;
-            }
-            previous = c;
-        }
-        if (output.size() > kDisplayLimit / sizeof(wchar_t)) return Error(L"The formatted report is too large to display.");
+            else if (c == L'"') quoted = false;
+        } else if (c == L'"') quoted = true;
+        else if (c == L'{' || c == L'[') { if (++depth > 128) return false; }
+        else if (c == L'}' || c == L']') { if (!depth) return false; --depth; }
     }
-    output += L'\n';
-    return output;
+    return depth == 0 && !quoted;
 }
 } // namespace
 
@@ -118,7 +88,7 @@ std::expected<std::filesystem::path, std::wstring> SaveJsonReport(
     } catch (const std::filesystem::filesystem_error&) { return Error(L"The output path is invalid or unavailable."); }
 }
 
-std::expected<std::wstring, std::wstring> ReadJsonReport(const std::filesystem::path& source) {
+std::expected<AssessmentResult, std::wstring> ReadJsonReport(const std::filesystem::path& source) {
     WinHandle file(::CreateFileW(source.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
     if (!file) return Error(L"Cannot open the report: " + FormatWinError(::GetLastError()));
     LARGE_INTEGER size{};
@@ -138,6 +108,8 @@ std::expected<std::wstring, std::wstring> ReadJsonReport(const std::filesystem::
         return Error(L"The report is not valid UTF-8.");
     if (text.find(L'\0') != std::wstring::npos) return Error(L"The report contains an invalid JSON control character.");
 
+    if (!SafeDepth(text)) return Error(L"Invalid JSON structure or nesting exceeds 128 levels.");
+
     Microsoft::WRL::Wrappers::RoInitializeWrapper runtime(RO_INIT_MULTITHREADED);
     const HRESULT initialized = runtime;
     if (FAILED(initialized) && initialized != RPC_E_CHANGED_MODE) return Error(L"Windows JSON support could not be initialized.");
@@ -152,6 +124,22 @@ std::expected<std::wstring, std::wstring> ReadJsonReport(const std::filesystem::
     if (FAILED(parser->TryParse(input.Get(), root.GetAddressOf(), &parsed)) || !parsed || !root)
         return Error(L"The file contains invalid JSON.");
     if (!ReportShape(root.Get())) return Error(L"The JSON file does not have the structure of a Security Assessment report.");
-    return Pretty(text);
+    bool valid = true;
+    auto result = json_detail::ReadReport(json_detail::Object(root, valid));
+    if (!valid) return Error(L"The report contains an invalid field type or value.");
+    if (result.score.maximum <= 0 || result.score.total > result.score.maximum || result.score.rules.size() > 4096)
+        return Error(L"The report contains invalid scores or too many rules.");
+    // Bound group sums used by the renderer without recalculating saved scores.
+    uint64_t maximum = 0;
+    for (const auto& rule : result.score.rules) {
+        maximum += rule.maxPoints;
+        if (rule.awardedPoints > rule.maxPoints || maximum > INT_MAX)
+            return Error(L"The report contains invalid rule scores.");
+        if (rule.description.size() > 16384)
+            return Error(L"A rule description exceeds the viewer's length limit (16384 bytes).");
+    }
+    for (const auto& rule : result.score.antivirusScores)
+        if (rule.awardedPoints > rule.maxPoints) return Error(L"The report contains invalid antivirus scores.");
+    return result;
 }
 } // namespace sa

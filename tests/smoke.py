@@ -24,7 +24,22 @@ def export_report(app, *options):
         assert output.startswith('JSON report saved to:') and not output.lstrip().startswith('{')
         report = json.loads(path.read_text(encoding='utf-8'))
         viewed, _ = run(app, '--json', 'view', str(path))
-        assert json.loads(viewed) == report
+        assert viewed.startswith('[!] Viewing a saved file. These results are not live.')
+        assert 'Windows Security Assessment' in viewed and 'Rule breakdown' in viewed
+        assert 'Warnings are disabled when viewing an export' in viewed
+        assert 'No warnings from the evaluated checks.' not in viewed
+        assert 'warnings' not in report['score']
+        assert report['system']['computerName'] in viewed
+        # Viewing uses saved values even if they differ from this machine.
+        modified = json.loads(json.dumps(report))
+        modified['system']['computerName'] = 'OFFLINE_COMPUTER_SENTINEL'
+        modified['score']['total'] = 123
+        modified['score']['warnings'] = [{'title': 'OLD_WARNING_SENTINEL'}]
+        offline = Path(folder) / 'offline.json'
+        offline.write_text(json.dumps(modified), encoding='utf-8')
+        restored, _ = run(app, '--json', 'view', str(offline))
+        assert 'OFFLINE_COMPUTER_SENTINEL' in restored and '123 / 1000' in restored
+        assert 'OLD_WARNING_SENTINEL' not in restored
         before = path.read_bytes()
         duplicate = subprocess.run([str(app), '--json', str(path), '--no-hash'], capture_output=True, timeout=65)
         assert duplicate.returncode == 1 and path.read_bytes() == before
@@ -138,11 +153,7 @@ def main():
     assert 'Windows update details available' not in console
     assert console.index('Rule breakdown') < console.index('SECURITY SCORE') < console.index('-- Warnings')
     assert all(hidden not in console for hidden in ['Active Network Adapters', 'UDP Port 69', 'Configured RDP port', 'RDP scope', 'Local TCP Listeners'])
-    assert 'hardening' in report and 'warnings' in report['score']
-    ranks = {'Low': 1, 'Medium': 2, 'High': 3, 'Critical': 4}
-    warnings = report['score']['warnings']
-    assert [ranks[w['severity']] for w in warnings] == sorted([ranks[w['severity']] for w in warnings], reverse=True)
-    assert all(not w['verificationOnly'] or w['severity'] == 'Low' for w in warnings)
+    assert 'hardening' in report and 'warnings' not in report['score']
     assert rules['enc.bl']['maxPoints'] == 50
     assert sum(rule['maxPoints'] for rule in rules.values() if rule['category'] == 'Network Security') == 200
     assert 'Update Services' in console and 'Pending Updates' in console

@@ -57,7 +57,9 @@ The destination folder must exist. Existing files are never overwritten. The com
 .\SecurityAssessment.exe --json view "assessment.json"
 ```
 
-This validates and formats the saved report in the terminal. It does not run another assessment. The viewer also accepts older app reports with the expected system and score structure.
+This opens the regular console report using the saved data and scores. A notice at the top states that you are viewing a file and the results are not live. It does not run another assessment.
+
+Warnings are omitted from JSON exports. The saved report viewer displays **“Warnings are disabled when viewing an export”**, including when opening older reports that contain warnings. Older reports with the expected system and score structure remain supported; fields absent from those files cannot be restored.
 
 For command help:
 

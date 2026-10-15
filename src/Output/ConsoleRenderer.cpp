@@ -215,9 +215,12 @@ const wchar_t* OutcomeColor(int awarded, int max) {
 
 } // namespace
 
-void RenderConsole(const AssessmentResult& r) {
+void RenderConsole(const AssessmentResult& r, ReportView view) {
     ConsoleStyle style;
 
+    if (view == ReportView::Export) {
+        out() << Bold() << Yel() << L"[!] Viewing a saved file. These results are not live." << Rst() << L"\n\n";
+    }
     Banner(L"Windows Security Assessment");
 
     // ------------------------------------------------------------ System
@@ -626,8 +629,11 @@ void RenderConsole(const AssessmentResult& r) {
     }
 
     Section(L"Warnings");
-    if (r.score.warnings.empty()) KV(L"Findings", L"No warnings from the evaluated checks.", Grn());
+    if (view == ReportView::Export)
+        KV(L"Findings", L"Warnings are disabled when viewing an export", Dim());
+    else if (r.score.warnings.empty()) KV(L"Findings", L"No warnings from the evaluated checks.", Grn());
     for (const auto severity : {Severity::Critical, Severity::High, Severity::Medium, Severity::Low}) {
+        if (view == ReportView::Export) break;
         const auto count = std::ranges::count(r.score.warnings, severity, &SecurityWarning::severity);
         if (!count) continue;
         const auto color = severity >= Severity::High ? Red() : severity == Severity::Medium ? Yel() : Cyn();

@@ -21,6 +21,7 @@ All runtime dependencies are Windows components or the C++ runtime. No Python pa
 
 | Location | Responsibility |
 | --- | --- |
+| `Output/JsonReportReader.h` | Restores typed saved report fields through Windows JSON interfaces, without collection or rescoring. |
 | `main.cpp` | Validates CLI arguments, coordinates collectors, and selects console/export/view mode. |
 | `Models.h`, `Common.h` | Typed assessment data, read statuses, score rules, and warnings. |
 | `Collectors/SystemCollector`, `HardwareCollector`, `SecurityCollector` | OS, processor/memory, TPM, Secure Boot, VBS, memory integrity, UAC, and memory protection. |
@@ -81,12 +82,12 @@ SecurityAssessment --json view <report-file>
 - `--json` runs the assessment and creates a UTF-8 file without a BOM. A generated `security-assessment-YYYYMMDD-HHMMSS-mmm-PID.json` filename uses the system's local clock and current folder.
 - An explicit destination is resolved from the current folder. Parents must exist. `CREATE_NEW` prevents replacement of existing files, including links. Writes are exclusive and flushed before success is reported; failed writes mark the owned handle for deletion where possible.
 - Export prints only a confirmation/path. It no longer emits JSON on stdout. This intentionally changes the old CLI contract.
-- `--json view <file>` reads a saved report without running collectors. It accepts UTF-8 with or without a BOM, validates JSON and the system/score/rules structure with Windows' parser, then pretty-prints it. Validation checks report structure, not provenance or authenticity.
-- The viewer accepts up to 64 MiB input, nesting up to 128 levels, and up to 128 MiB formatted UTF-16 output. Invalid encoding, malformed JSON, unrelated JSON, unavailable files, and excessive input fail with an error.
+- `--json view <file>` reads a saved report without running collectors. It accepts UTF-8 with or without a BOM, validates JSON and the system/score/rules structure with Windows' parser, then restores the typed assessment model and renders the regular console report with a prominent offline notice. Saved scores and rules are preserved without calling collectors or the score engine. Validation checks report structure, not provenance or authenticity.
+- The viewer accepts up to 64 MiB input, nesting up to 128 levels, 100,000 items per array, and 4,096 score rules with descriptions up to 16,384 UTF-8 bytes. Typed fields, numeric ranges, and rule score bounds are validated; imported terminal control characters are displayed as visible Unicode escapes. Invalid encoding, malformed JSON, unrelated JSON, unavailable files, and excessive input fail with an error.
 - `--no-hash` affects assessment only and cannot be combined with view mode. Unexpected arguments and duplicate `--json` are rejected before collecting data.
 - Exit codes: 0 for success/help, 1 for file/runtime output errors, 2 for invalid arguments. The score does not control the exit code.
 
-JSON retains the `system`, `hardware`, `security`, `defender`, `antivirus`, `firewall`, `storage`, `network`, `hardening`, `services`, `applications`, `registryFindings`, `directoryFindings`, `persistence`, `windowsUpdate`, and `score` report data. Native boolean readings must be interpreted with their accompanying status fields. The viewer supports older report layouts as long as their system and score structure remains recognizable.
+JSON retains the `system`, `hardware`, `security`, `defender`, `antivirus`, `firewall`, `storage`, `network`, `hardening`, `services`, `applications`, `registryFindings`, `directoryFindings`, `persistence`, `windowsUpdate`, and `score` report data. Native boolean readings must be interpreted with their accompanying status fields. Warnings are omitted from exports and ignored when importing older files. The viewer explicitly displays “Warnings are disabled when viewing an export”. The viewer supports older report layouts as long as their system and score structure remains recognizable; absent optional fields keep their model defaults.
 
 ## Console and warnings
 

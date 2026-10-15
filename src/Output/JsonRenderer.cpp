@@ -119,6 +119,7 @@ std::string RenderJson(const AssessmentResult& r) {
               << ",\"avx\":" << B(r.cpu.avx) << ",\"avx2\":" << B(r.cpu.avx2)
               << ",\"avx512f\":" << B(r.cpu.avx512f) << ",\"aesni\":" << B(r.cpu.aesni)
               << ",\"sha\":" << B(r.cpu.sha) << ",\"vmx\":" << B(r.cpu.vmx)
+              << ",\"hypervisorPresent\":" << B(r.cpu.hypervisorPresent)
               << ",\"svm\":" << B(r.cpu.svm) << ",\"nx\":" << B(r.cpu.nx)
       <<   "}"
       << "},"
@@ -450,15 +451,6 @@ std::string RenderJson(const AssessmentResult& r) {
         o << "{\"id\":" << Q(score.id) << ",\"name\":" << Q(score.description)
           << ",\"state\":" << Q(score.state) << ",\"maxPoints\":" << score.maxPoints
           << ",\"awardedPoints\":" << score.awardedPoints << ",\"reason\":" << Q(score.reason) << "}";
-    }
-    o << "],\"warnings\":[";
-    for (size_t i = 0; i < r.score.warnings.size(); ++i) {
-        if (i) o << ",";
-        const auto& warning = r.score.warnings[i];
-        o << "{\"ruleId\":" << Q(warning.ruleId) << ",\"severity\":" << Q(std::wstring(ToW(warning.severity)))
-          << ",\"title\":" << Q(warning.title) << ",\"detail\":" << Q(warning.detail)
-          << ",\"recommendation\":" << Q(warning.recommendation)
-          << ",\"verificationOnly\":" << B(warning.verificationOnly) << "}";
     }
     o << "]}}";
     return o.str();

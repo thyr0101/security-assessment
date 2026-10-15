@@ -1,5 +1,6 @@
 #pragma once
 #include "../Models.h"
 namespace sa {
-void RenderConsole(const AssessmentResult& r);
+enum class ReportView { Live, Export };
+void RenderConsole(const AssessmentResult& r, ReportView view = ReportView::Live);
 }

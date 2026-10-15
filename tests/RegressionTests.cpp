@@ -497,10 +497,10 @@ static void TestRegisteredAntivirus() {
           "unrecognized periodic scanning state remains unknown");
 }
 
-static std::wstring CaptureConsole(const AssessmentResult& result) {
+static std::wstring CaptureConsole(const AssessmentResult& result, ReportView view = ReportView::Live) {
     std::wostringstream captured;
     auto* original = std::wcout.rdbuf(captured.rdbuf());
-    try { RenderConsole(result); } catch (...) { std::wcout.rdbuf(original); throw; }
+    try { RenderConsole(result, view); } catch (...) { std::wcout.rdbuf(original); throw; }
     std::wcout.rdbuf(original);
     return captured.str();
 }
@@ -554,13 +554,45 @@ static void TestJsonFiles(Fixture& fixture) {
     AssessmentResult result;
     result.os.productName = L"quoted \"name\" with [braces] and \\slashes";
     result.score = ComputeScore(result);
+    result.os.computerName = L"SAVED_COMPUTER";
+    result.cpu.brand = L"SAVED_CPU";
+    result.cpu.hypervisorPresent = true;
+    result.memory.totalBytes = 32ull << 30;
+    result.memory.availableBytes = 12ull << 30;
+    result.windowsUpdate = HealthyWindowsUpdate();
+    WindowsUpdateItem update;
+    update.title = L"SAVED_SECURITY_UPDATE"; update.classifications = {L"Security Updates"};
+    update.products = {L"Microsoft .NET"}; update.kbArticles = {L"1234567"}; update.optional = Tri::No;
+    result.windowsUpdate.updates.push_back(update); result.windowsUpdate.pendingCount = 1;
+    StorageDisk disk; disk.index = 3; disk.model = L"SAVED_DISK"; disk.sizeBytes = 1ull << 40;
+    result.storage.disks.push_back(disk);
+    StorageVolume volume; volume.mountPoint = L"Z:\\"; volume.diskIndices = {3}; volume.bitLockerState = L"On";
+    volume.totalBytes = 1ull << 40; volume.freeBytes = 1ull << 39;
+    result.storage.volumes.push_back(volume);
+    ApplicationFinding app; app.name = L"Saved apps"; app.status = Status::Success;
+    app.apps.push_back({L"SAVED_APP", L"1.2", {{L"Z:\\Saved.exe", L"1.2", L"saved-hash"}}});
+    result.applications.push_back(app);
+    result.score.total = 321; // A recorded score must never be recomputed during viewing.
+    Check(!result.score.warnings.empty(), "fixture has live warnings to exclude");
     const auto text = RenderJson(result);
+    Check(text.find("\"warnings\"") == std::string::npos, "JSON exports omit warnings by default");
     const auto path = fixture.dir / L"saved report \u03a9.json";
     const auto saved = SaveJsonReport(text, path);
     Check(saved.has_value() && fs::exists(path), "save JSON to a Unicode path with spaces");
     const auto viewed = ReadJsonReport(path);
-    Check(viewed.has_value() && viewed->find(L"quoted") != std::wstring::npos && viewed->find(L"\n  \"system\"") != std::wstring::npos,
-          "native Windows parser validates and formats a saved report");
+    Check(viewed.has_value(), "native Windows parser restores a saved report");
+    Check(RenderJson(*viewed) == text, "all serialized report fields round trip without recomputing scores");
+    Check(viewed->score.total == 321 && viewed->score.warnings.empty(), "saved scores are preserved and warnings are not restored");
+    const auto console = CaptureConsole(*viewed, ReportView::Export);
+    const auto live = CaptureConsole(result);
+    const auto banner = console.find(L"Windows Security Assessment");
+    Check(console.find(L"Viewing a saved file. These results are not live.") < banner, "offline warning precedes the report");
+    Check(console.substr(banner, console.find(L"-- Warnings") - banner) == live.substr(0, live.find(L"-- Warnings")),
+          "saved report uses the same display as the live report before warnings");
+    Check(console.find(L"Warnings are disabled when viewing an export") != std::wstring::npos &&
+          console.find(L"verification gap") == std::wstring::npos, "export viewer explicitly disables security warnings");
+    Check(CaptureConsole(result, ReportView::Export).find(L"verification gap") == std::wstring::npos,
+          "export context suppresses even populated warning lists");
     Check(!SaveJsonReport("replacement", path), "exports do not overwrite existing files");
     Check(fs::file_size(path) == text.size() + 1, "failed overwrite preserves original file");
     Check(!SaveJsonReport(text, fixture.dir / L"missing" / L"report.json"), "unavailable output directories fail clearly");
@@ -574,6 +606,29 @@ static void TestJsonFiles(Fixture& fixture) {
     Check(!ReadJsonReport(bad), "raw NUL characters cannot hide trailing report data");
     std::ofstream(bad, std::ios::binary) << "\xef\xbb\xbf" << text;
     Check(ReadJsonReport(bad).has_value(), "UTF-8 BOM reports remain viewable");
+    auto legacy = text;
+    legacy.insert(legacy.size() - 2, ",\"warnings\":[{\"title\":\"OLD_WARNING_SENTINEL\"}]");
+    std::ofstream(bad, std::ios::binary) << legacy;
+    auto old = ReadJsonReport(bad);
+    Check(old && old->score.warnings.empty() && RenderJson(*old) == text, "legacy warning arrays are ignored");
+    std::ofstream(bad, std::ios::binary) << R"({"system":{"productName":"\u001b[2J\nspoof"},"score":{"total":7,"maximum":10,"rules":[]}})";
+    auto controls = ReadJsonReport(bad);
+    Check(controls && controls->os.productName == L"\\u001B[2J\\u000Aspoof", "imported controls cannot inject terminal escapes");
+    for (const auto* invalid : {
+        R"({"system":{},"score":{"total":0,"maximum":2147483648,"rules":[]}})",
+        R"({"system":{},"score":{"total":0,"maximum":10,"rules":[{"maxPoints":5,"awardedPoints":6}]}})",
+        R"({"system":{},"score":{"total":0,"maximum":10,"rules":[{"maxPoints":-1}]}})",
+        R"({"system":{"build":"bad"},"score":{"total":0,"maximum":10,"rules":[]}})",
+        R"({"system":{"uptimeSeconds":18446744073709551616},"score":{"total":0,"maximum":10,"rules":[]}})"}) {
+        std::ofstream(bad, std::ios::binary) << invalid;
+        Check(!ReadJsonReport(bad), "invalid field types, out-of-range numbers and impossible rule scores are rejected");
+    }
+    auto oversized = result;
+    oversized.score.rules.front().description.assign(16385, 'x');
+    std::ofstream(bad, std::ios::binary) << RenderJson(oversized);
+    Check(!ReadJsonReport(bad), "oversized rule labels cannot multiply console padding without bound");
+    std::ofstream(bad, std::ios::binary) << std::string(129, '[') << std::string(129, ']');
+    Check(!ReadJsonReport(bad), "deeply nested inputs are rejected before parsing");
 }
 
 int main() {

@@ -92,7 +92,7 @@ int wmain(int argc, wchar_t** argv) {
     if (viewJson) {
         const auto saved = ReadJsonReport(jsonPath);
         if (!saved) { std::wcerr << saved.error() << L"\n"; return 1; }
-        std::wcout << *saved;
+        RenderConsole(*saved, ReportView::Export);
         std::wcout.flush();
         return std::wcout ? 0 : 1;
     }

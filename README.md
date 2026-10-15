@@ -2,23 +2,25 @@
 
 A local Windows security auditor that checks how your computer is protected, gives it a score out of **1000**, and highlights settings that need attention.
 
+See [CHANGES.md](CHANGES.md) for the first-release changelog.
+
 It uses built-in Windows interfaces. It does not contact online services, run external commands, install software, or change security settings.
 
 ## What it checks
 
 - **Hardware protection:** Secure Boot, the TPM security chip, memory integrity, and protection for sign-in secrets.
 - **Windows protection:** permission prompts, protection against memory attacks, Smart App Control, protected sign-in services, automatic locking, and AutoPlay restrictions.
-- **Antivirus:** Microsoft Defender protection or antivirus products registered with Windows, including separate product scores.
+- **Antivirus:** Microsoft Defender protection or antivirus products registered with Windows Security Center. Registered products receive separate scores, capped at 180 points overall. Defender periodic scanning is informational.
 - **Network protection:** firewall profiles, file-sharing safeguards, remote access authentication, and protection against older sign-in methods.
 - **Drive encryption:** BitLocker coverage across fixed volumes, grouped beneath their physical disks.
 - **Account protection:** secure permission prompts, the built-in Guest account, account lockout, and Remote Assistance invitations.
-- **Windows Update:** pending updates, update services, restart requirements, and installation results. Pending updates are listed without affecting the score.
+- **Windows Update:** pending updates from the local cache, update-service readiness, restart requirements and the latest recorded installation result. Pending updates are listed without affecting the score.
 
 The report also includes startup-location readability and threshold scan results. Privacy settings and minimum password length are not collected.
 
 ## Run an assessment
 
-Windows 10 or newer is required. Open a terminal in the folder containing the executable:
+The documented build configuration targets **64-bit Windows 10 or newer**. Open a terminal in the folder containing the executable:
 
 ```powershell
 .\SecurityAssessment.exe
@@ -45,7 +47,7 @@ The prompt explains both formats. For scripts, specify the format directly (no p
 
 | Mode | Contents | Opens in the app viewer |
 | --- | --- | --- |
-| `0` Compact | Numbered field keys with actual values; Boolean states use 0/1. Disabled = 0, enabled = 1, unknown = 2. | Yes |
+| `0` Compact | Numbered field keys and numeric states. Booleans use 0/1; tri-state readings also support 2 = unknown and 3 = not applicable. | Yes |
 | `1` Readable | Descriptive field names and text states for manual inspection or other tools. | No |
 
 Omit the filename to generate one in the current folder. The destination folder must exist, and existing files are never overwritten. The command prints the saved file's path. Both formats save the displayed report and recorded scores, excluding hidden inventories and internal evidence. Compact encoding is **not encryption**; both formats contain system details.
@@ -79,4 +81,4 @@ This is a security configuration assessment, not an antivirus scanner or a guara
 
 ## Build and development
 
-See [src/TECHNICAL.md](src/TECHNICAL.md) for build instructions, architecture, APIs, score weights, report format, and debugging details.
+See [src/TECHNICAL.md](src/TECHNICAL.md) for build instructions, architecture, APIs, score weights and debugging details, and [src/JSON_FORMAT.md](src/JSON_FORMAT.md) for the compact JSON format.

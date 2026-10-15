@@ -14,7 +14,7 @@ New exports use numbered fields with their actual values directly beside them. T
 - `d`: assessment data. Objects and arrays keep the descriptive schema's hierarchy.
 - Decimal field IDs are fixed by the table below. OS name is `1`, and build is `2`.
 - Text values such as OS names, update titles and rule descriptions remain directly in their fields. Measured numbers and nulls remain numbers and nulls.
-- Empty text properties and optional empty arrays are omitted and restored from model defaults. Zero or unavailable numeric properties with zero defaults are also omitted. Required score totals and fields with nonzero defaults remain explicit. All Boolean and state readings, and every array element, are retained.
+- Empty text properties and optional empty arrays are omitted and restored from model defaults. Zero or unavailable numeric properties with zero defaults are also omitted. Required score totals and fields with nonzero defaults remain explicit. Within the selected display snapshot, Boolean/state properties and array elements are retained; compact default omission does not remove them.
 - There is no string dictionary or text-reference encoding in version 2.
 
 ## State codes
@@ -29,9 +29,9 @@ New exports use numbered fields with their actual values directly beside them. T
 | BitLocker state | Off=0; On=1; Unknown=2 |
 | Score category | 0=Hardware Security; 1=OS Security; 2=Windows Update; 3=Malware Protection; 4=Network Security; 5=Encryption; 6=Account Security; 7=Hardening; 8=Software Hygiene; 9=Informational |
 
-`enabled` is Boolean for TPM, UAC, Defender and firewall profiles; it is tri-state for Secure Boot and general security settings. Text arrays contain actual strings, and numeric arrays such as disk indexes retain actual numbers. Native JSON booleans are not used in `d`.
+`enabled` is Boolean for UAC, Defender and firewall profiles (and for the reserved TPM field in older backups); it is tri-state for Secure Boot and general security settings. Text arrays contain actual strings, and numeric arrays such as disk indexes retain actual numbers. Native JSON booleans are not used in `d`.
 
-Exports contain only console display inputs and recorded rule results. Hidden inventories, raw scoring-only evidence, provenance strings, rule reasons and non-exceeded successful threshold scans are omitted. Warnings and application inventory are not exported. Scores are restored without rescoring. Input is limited to 64 MiB, nesting to 128 levels, expanded JSON to 128 MiB. Unknown keys and invalid state codes are rejected. Terminal control characters are escaped for display after import.
+Exports contain only console display inputs and recorded rule results. Hidden inventories, raw scoring-only evidence, provenance strings, rule reasons and non-exceeded successful threshold scans are omitted. Warnings and application inventory are not exported. The backup viewer displays a stale-data notice and disables warnings. Scores are restored without rescoring. Input is limited to 64 MiB, nesting to 128 levels, expanded JSON to 128 MiB. Unknown keys and invalid state codes are rejected. Terminal control characters are escaped for display after import.
 
 ## Previous compact backups
 

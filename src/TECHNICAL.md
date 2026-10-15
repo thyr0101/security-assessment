@@ -36,17 +36,17 @@ All runtime dependencies are Windows components or the C++ runtime. No Python pa
 | `Output/ConsoleRenderer`, `JsonRenderer` | Report composition and display snapshot selection. |
 | `Output/ConsoleLayout.h`, `JsonWriter.h` | Reusable box layout, colors, wrapping, JSON escaping and object/array helpers. |
 | `ComHelpers.h`, `CollectionTimer.h` | Shared COM string ownership/error formatting and optional collector tracing. |
-| `Output/JsonFile` | Safe file creation, native JSON validation, and terminal formatting of saved reports. |
+| `Output/JsonFile` | Safe file creation, native JSON validation and typed report loading. |
 
-Four COM-initialized workers invoke a fixed array of function pointers and run independent collectors and write distinct result fields. Workers join before scoring and rendering. Provider failures preserve unknown/unavailable states rather than inventing disabled or secure results. Privacy collection and minimum-password-length collection have been removed from the data model, collectors, renderers, and scoring.
+Up to four COM-initialized workers invoke a fixed array of function pointers. Independent collectors write distinct result fields. Workers join before scoring and rendering. Provider failures preserve unknown/unavailable states rather than inventing disabled or secure results. Privacy collection and minimum-password-length collection have been removed from the data model, collectors, renderers, and scoring.
 
 ## Windows interfaces
 
 - Registry configuration uses Win32 registry APIs. Explicit policy takes precedence where applicable; absence is not automatically treated as secure or insecure.
 - Defender, Device Guard, SMB configuration, and elevated TPM/BitLocker use COM/WMI. SMB uses the provider's read-only `GetConfiguration` methods.
 - Non-admin TPM presence/version use TPM Base Services (`Tbsi_GetDeviceInfo`). Readiness remains explicitly unverified. Non-admin BitLocker checks retain AccessDenied without waiting on its restricted namespace.
-- Windows Security Center provides antivirus registrations. Every product receives an independent 180-point score when Windows confirms it enabled; the overall category remains capped at 180. Defender periodic scanning is informational.
-- IP Helper selects only Up, non-loopback IPv4 adapters for the scored NetBIOS check. Temporary adapter IDs match WMI policy readings; addresses, adapter inventory and TCP/UDP endpoints are not stored or exported. No endpoint tables or process names are enumerated. DHCP-controlled NetBIOS does not establish that it is disabled.
+- Windows Security Center provides antivirus registrations. In registration-based scoring mode, each product receives 180/180 when Windows confirms it enabled and 0/180 otherwise; the overall category remains capped at 180. This mode is used when a third-party product is registered, or registered products are available and Defender cannot be confirmed active. Defender periodic scanning is informational.
+- IP Helper selects only Up, non-loopback IPv4 adapters for the scored NetBIOS check. Temporary adapter IDs match WMI policy readings; addresses, adapter inventory and TCP/UDP endpoints are not stored or exported. Network endpoint tables and their owning process names are not enumerated; the separate LSASS protection check still locates its target process. DHCP-controlled NetBIOS does not establish that it is disabled.
 - `GetProcessInformation(ProcessProtectionLevelInfo)` reads actual LSASS protection. Native local SAM APIs read lockout and identify Guest by RID 501, including renamed accounts. Domain and Microsoft accounts can have different policies.
 - `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` maps mounted volumes to physical disks. Spanned volumes appear under every referenced disk with a span note; unmapped volumes remain visible.
 - Windows Update Agent searches offline with service self-upgrade disabled and a 45-second completion timeout. Search failures are not interpreted as no pending updates. Service startup type, restart state and the latest installation result are used only for visible scoring. Hidden timestamps, installation titles and update identifiers are not retained. Update identities are read temporarily to deduplicate pending updates.
@@ -98,7 +98,7 @@ Warnings are omitted and disabled in the backup viewer. Existing version 1 and 2
 
 ## Console and warnings
 
-Each report category, the rule breakdown, score and warnings has its own box. Terminal width determines the layout; long content wraps inside the border without truncation. ANSI color sequences do not count toward line width, UTF-16 surrogate pairs stay together, and Windows character classification handles wide/nonspacing characters. Color consoles use Unicode borders; redirected output and `NO_COLOR` use ASCII borders. The backup notice uses the same box helpers with red emphasis.
+Each report category, the rule breakdown, score and warnings has its own box. Terminal width determines the layout; long content wraps inside the border without truncation. ANSI color sequences do not count toward line width, UTF-16 surrogate pairs stay together, and Windows character classification handles wide/nonspacing characters. Color consoles use Unicode borders; redirected output and a nonempty `NO_COLOR` use ASCII borders. Redirected output uses a 100-column layout when no console width is available. The backup notice uses the same box helpers with red emphasis.
 
 Console state belongs to each `ConsoleLayout` instance, which also restores the terminal mode. The `.cpp` file composes report sections; the layout header owns formatting helpers. Related facts share rows only when full values fit. Hardware pictograms remain omitted because font coverage varies. The console still ends with breakdown, score, then warnings.
 
@@ -123,15 +123,15 @@ python tests/smoke.py build-tests/Release
 
 Native fixtures use private temporary files and registry data. They cover parsing, ownership, rule boundaries, partial readings, score sums, antivirus fallback, hidden console fields, and JSON save/view behavior. Smoke checks cover file export, automatic filenames, compact viewer round trips, numeric states, readable-file rejection, interactive choices, no-overwrite behavior, invalid arguments, legacy CLI compatibility, removed application inventory, help, and redirected console output.
 
-Optional MSVC `/analyze` and AddressSanitizer builds can check static and memory errors. The collection cleanup passed Debug/Release regressions, live non-admin smoke runs, static analysis, and AddressSanitizer; elevated TPM/BitLocker provider collection was not run live. Synthetic tests cover how those provider results affect scoring.
+Optional MSVC `/analyze` and AddressSanitizer builds can check static and memory errors. The earlier collection cleanup passed Debug/Release regressions, live non-admin smoke runs, static analysis and AddressSanitizer. Those results precede the latest box-layout/helper changes, which were built and inspected without rerunning automated tests; elevated TPM/BitLocker provider collection was not run live. Synthetic tests cover how those provider results affect scoring.
 
-In one same-machine comparison, compact exports decreased from 20,063 to 7,188 bytes (64.2%). Every scored rule state, award and weight matched the prior build (772/1000). Export sizes depend on pending updates and visible findings. Warm non-admin smoke exports took about 0.6–0.7 seconds; these individual runs are not a benchmark.
+During the earlier collection cleanup, one same-machine comparison found compact exports decreased from 20,063 to 7,188 bytes (64.2%). Every scored rule state, award and weight matched the prior build (772/1000). Export sizes depend on pending updates and visible findings. Warm non-admin smoke exports took about 0.6–0.7 seconds; these individual runs are not a benchmark.
 
 Set `SA_TRACE_TIMINGS=1` to emit per-collector durations to stderr. Disabled tracing skips performance-clock reads. Prior measured non-admin runs dropped from a 10.994-second profiled baseline to a median of 0.802 seconds over five warm Release JSON runs after avoiding restricted WMI waits and overlapping collectors. Different machines/provider cache states will differ. C++23 typed errors (`std::expected`), owned output pointers (`std::out_ptr`), ranges, joined workers, and bounded topology traversal support safer collection without third-party dependencies.
 
 ## Local archive
 
-`archived/ApplicationCollector.cpp` and `archived/ApplicationCollector.h` preserve the removed collector locally. `/archived/` is ignored by Git and is outside the build source tree; builds and tests do not depend on these files. New JSON exports omit applications, and removed application fields are not restored. Removing the informational application rule does not change the 1000-point scale.
+The removed `ApplicationCollector.cpp` and `ApplicationCollector.h` were preserved locally in `archived/`. These files are not included in the repository or required by a fresh checkout. `/archived/` is ignored by Git and is outside the build source tree; builds and tests do not depend on these files. New JSON exports omit applications, and removed application fields are not restored. Removing the informational application rule does not change the 1000-point scale.
 
 ## Network sign-in policy reporting
 

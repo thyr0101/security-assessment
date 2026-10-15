@@ -13,80 +13,33 @@ namespace fs = std::filesystem;
 
 namespace sa {
 
-static void AddRunKey(PersistenceReport& rep, HKEY root, const std::wstring& path,
-                      const std::wstring& display) {
-    RegistryReader r;
-    const Status status = r.Open(root, path, KEY_WOW64_64KEY);
-    if (status != Status::Success) {
-        if (status != Status::NotFound) rep.status = status;
-        return;
-    }
-    std::vector<std::pair<std::wstring, DWORD>> vals;
-    const Status enumerated = r.EnumValues(vals);
-    if (enumerated != Status::Success) { rep.status = enumerated; return; }
-    for (auto& [name, type] : vals) {
-        if (name.empty()) continue;
-        PersistenceEntry e;
-        e.location = display;
-        e.name = name;
-        std::wstring cmd;
-        if (type != REG_SZ && type != REG_EXPAND_SZ) continue;
-        const Status read = r.GetString(name.c_str(), cmd);
-        if (read == Status::Success) e.command = cmd;
-        else rep.status = read;
-        rep.entries.push_back(std::move(e));
-    }
-}
-
-static void ScanStartupFolders(PersistenceReport& rep) {
-    auto scan = [&](REFKNOWNFOLDERID id, const wchar_t* location) {
-        PWSTR path = nullptr;
-        const HRESULT hr = ::SHGetKnownFolderPath(id, KF_FLAG_DONT_VERIFY, nullptr, &path);
-        struct PathGuard { PWSTR path; ~PathGuard() { ::CoTaskMemFree(path); } } guard{path};
-        if (FAILED(hr) || !path) {
-            rep.status = hr == E_ACCESSDENIED ? Status::AccessDenied : Status::Unavailable;
-            return;
-        }
-        const fs::path dir(path);
-        std::error_code ec;
-        if (fs::exists(dir, ec)) {
-            for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
-                if (IEquals(it->path().filename().wstring(), L"desktop.ini")) continue;
-                const bool regular = it->is_regular_file(ec);
-                if (ec) break;
-                if (!regular) continue;
-                PersistenceEntry e;
-                e.location = location;
-                e.name = it->path().filename().wstring();
-                e.command = it->path().wstring();
-                rep.entries.push_back(std::move(e));
-            }
-        }
-        if (ec) rep.status = StatusFromWin32(static_cast<DWORD>(ec.value()));
-    };
-    scan(FOLDERID_Startup, L"Startup (user)");
-    scan(FOLDERID_CommonStartup, L"Startup (machine)");
-}
-
+// Only readability is displayed. Do not enumerate startup names or read commands.
 PersistenceReport CollectPersistence() {
-    PersistenceReport rep;
-    rep.status = Status::Success;
-    AddRunKey(rep, HKEY_CURRENT_USER,
-              L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", L"HKCU\\...\\Run");
-    AddRunKey(rep, HKEY_CURRENT_USER,
-              L"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce", L"HKCU\\...\\RunOnce");
-    AddRunKey(rep, HKEY_LOCAL_MACHINE,
-              L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", L"HKLM\\...\\Run");
-    AddRunKey(rep, HKEY_LOCAL_MACHINE,
-              L"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce", L"HKLM\\...\\RunOnce");
-    AddRunKey(rep, HKEY_LOCAL_MACHINE,
-              L"Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Run",
-              L"HKLM\\Wow6432Node\\...\\Run");
-    AddRunKey(rep, HKEY_LOCAL_MACHINE,
-              L"Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
-              L"HKLM\\Wow6432Node\\...\\RunOnce");
-    ScanStartupFolders(rep);
-    return rep;
+    PersistenceReport report;
+    report.status = Status::Success;
+    auto key = [&](HKEY root, const wchar_t* path) {
+        RegistryReader reader;
+        const auto status = reader.Open(root, path, KEY_WOW64_64KEY);
+        if (status != Status::Success && status != Status::NotFound) report.status = status;
+    };
+    for (const auto* name : {L"Run", L"RunOnce"}) {
+        const auto path = std::wstring(L"Software\\Microsoft\\Windows\\CurrentVersion\\") + name;
+        key(HKEY_CURRENT_USER, path.c_str()); key(HKEY_LOCAL_MACHINE, path.c_str());
+        key(HKEY_LOCAL_MACHINE, (std::wstring(L"Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\") + name).c_str());
+    }
+    for (const auto* id : {&FOLDERID_Startup, &FOLDERID_CommonStartup}) {
+        PWSTR path = nullptr;
+        const HRESULT result = ::SHGetKnownFolderPath(*id, KF_FLAG_DONT_VERIFY, nullptr, &path);
+        struct FreePath { PWSTR value; ~FreePath() { ::CoTaskMemFree(value); } } owner{path};
+        if (FAILED(result) || !path) { report.status = result == E_ACCESSDENIED ? Status::AccessDenied : Status::Unavailable; continue; }
+        WinHandle directory(::CreateFileW(path, FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+        if (!directory) {
+            const auto status = StatusFromWin32(::GetLastError());
+            if (status != Status::NotFound) report.status = status;
+        }
+    }
+    return report;
 }
 
 std::vector<RegistryScanDefinition> DefaultRegistryScans() {
@@ -116,7 +69,6 @@ std::vector<RegistryFinding> RunRegistryScans(const std::vector<RegistryScanDefi
         f.status = r.Open(d.root, d.subkey, d.view);
         if (f.status == Status::Success) {
             f.status = r.CountValues(f.valueCount);
-            if (f.status == Status::Success) f.status = r.CountSubkeys(f.subkeyCount);
             f.exceeded = f.status == Status::Success && f.valueCount > d.threshold;
         }
         out.push_back(std::move(f));
@@ -152,8 +104,7 @@ std::vector<DirectoryFinding> RunDirectoryScans(const std::vector<DirectoryScanD
             for (; !ec && it != end; it.increment(ec)) {
                 const bool directory = it->is_directory(ec);
                 if (ec) break;
-                if (directory) ++f.dirCount;
-                else ++f.fileCount;
+                if (!directory) ++f.fileCount;
                 if constexpr (std::is_same_v<decltype(it), fs::recursive_directory_iterator>) {
                     // Avoid traversing junctions/reparse points into another tree or a cycle.
                     const DWORD attrs = ::GetFileAttributesW(it->path().c_str());
@@ -174,11 +125,6 @@ std::vector<DirectoryFinding> RunDirectoryScans(const std::vector<DirectoryScanD
 }
 
 // ---------------- Security-relevant services ----------------
-static const wchar_t* kSecurityServices[] = {
-    L"WinDefend", L"WdNisSvc", L"SecurityHealthService", L"wscsvc",
-    L"MpsSvc", L"wuauserv", L"CryptSvc", L"EventLog"
-};
-
 static std::wstring StateName(DWORD s) {
     switch (s) {
     case SERVICE_STOPPED: return L"Stopped";
@@ -230,7 +176,6 @@ ServiceReport CollectServices(const std::vector<std::wstring>& names) {
             if (::QueryServiceConfigW(svc.get(), cfg, cfgSz, &cfgSz)) {
                 e.displayName = cfg->lpDisplayName ? cfg->lpDisplayName : L"";
                 e.startType = StartName(cfg->dwStartType);
-                e.exePath = cfg->lpBinaryPathName ? cfg->lpBinaryPathName : L"";
                 // Resolve the canonical service key name from the SCM's display name.
                 // Keep the requested name as a fallback when the mapping is unavailable.
                 if (!e.displayName.empty()) {
@@ -251,10 +196,6 @@ ServiceReport CollectServices(const std::vector<std::wstring>& names) {
         rep.entries.push_back(std::move(e));
     }
     return rep;
-}
-
-ServiceReport CollectSecurityServices() {
-    return CollectServices(std::vector<std::wstring>(std::begin(kSecurityServices), std::end(kSecurityServices)));
 }
 
 } // namespace sa

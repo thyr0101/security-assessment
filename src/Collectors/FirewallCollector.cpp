@@ -75,9 +75,6 @@ namespace sa {
             if (SUCCEEDED(outboundResult))
                 prof.defaultOutbound = static_cast<DWORD>(outAction);
 
-            VARIANT_BOOL disabled = VARIANT_FALSE;
-            if (SUCCEEDED(policy->get_NotificationsDisabled(p, &disabled)))
-                prof.notificationsEnabled = disabled == VARIANT_FALSE;
             prof.status = SUCCEEDED(enabledResult) && SUCCEEDED(inboundResult) && SUCCEEDED(outboundResult)
                 ? Status::Success : Status::Unavailable;
             if (prof.status != Status::Success) fw.status = Status::Unavailable;

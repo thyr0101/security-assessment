@@ -40,26 +40,6 @@ void PendingFailure(WindowsUpdateInfo& info, HRESULT hr, const wchar_t* operatio
     info.pendingReason = std::wstring(operation) + L" failed (" + ErrorCode(hr) + L").";
 }
 
-std::wstring DateUtc(DATE date) {
-    SYSTEMTIME time{};
-    if (!::VariantTimeToSystemTime(date, &time)) return {};
-    wchar_t text[32]{};
-    swprintf_s(text, L"%04u-%02u-%02uT%02u:%02u:%02uZ", time.wYear, time.wMonth, time.wDay,
-        time.wHour, time.wMinute, time.wSecond);
-    return text;
-}
-
-const wchar_t* OperationName(OperationResultCode result) {
-    switch (result) {
-    case orcSucceeded: return L"Succeeded";
-    case orcSucceededWithErrors: return L"Succeeded with errors";
-    case orcFailed: return L"Failed";
-    case orcAborted: return L"Aborted";
-    case orcInProgress: return L"In progress";
-    default: return L"Unknown";
-    }
-}
-
 void ReadUpdateTypes(IUpdate* update, WindowsUpdateItem& item) {
     UpdateType type{};
     if (SUCCEEDED(update->get_Type(&type))) {
@@ -97,7 +77,7 @@ public:
     }
 };
 
-void ReadDatesAndReboot(WindowsUpdateInfo& info) {
+void ReadRebootState(WindowsUpdateInfo& info) {
     ComPtr<ISystemInformation> system;
     if (SUCCEEDED(::CoCreateInstance(__uuidof(SystemInformation), nullptr, CLSCTX_INPROC_SERVER,
         __uuidof(ISystemInformation), reinterpret_cast<void**>(system.GetAddressOf()))) && system) {
@@ -105,14 +85,7 @@ void ReadDatesAndReboot(WindowsUpdateInfo& info) {
         if (SUCCEEDED(system->get_RebootRequired(&reboot)))
             info.rebootRequired = reboot == VARIANT_FALSE ? Tri::No : Tri::Yes;
     }
-    ComPtr<IAutomaticUpdates2> automatic;
-    if (FAILED(::CoCreateInstance(__uuidof(AutomaticUpdates), nullptr, CLSCTX_INPROC_SERVER,
-        __uuidof(IAutomaticUpdates2), reinterpret_cast<void**>(automatic.GetAddressOf()))) || !automatic) return;
-    ComPtr<IAutomaticUpdatesResults> results;
-    if (FAILED(automatic->get_Results(results.GetAddressOf())) || !results) return;
-    _variant_t date;
-    if (SUCCEEDED(results->get_LastSearchSuccessDate(&date)) && date.vt == VT_DATE)
-        info.lastSearchUtc = DateUtc(date.date);
+
 }
 
 void ReadHistory(IUpdateSearcher* searcher, WindowsUpdateInfo& info) {
@@ -135,13 +108,8 @@ void ReadHistory(IUpdateSearcher* searcher, WindowsUpdateInfo& info) {
         UpdateOperation operation{};
         if (FAILED(entry->get_Operation(&operation))) { info.historyStatus = Status::Unavailable; return; }
         if (operation != uoInstallation) continue;
-        Bstr title;
-        if (SUCCEEDED(entry->get_Title(&title.value))) info.lastInstallationTitle = title.str();
-        DATE date = 0;
-        if (SUCCEEDED(entry->get_Date(&date))) info.lastInstallationUtc = DateUtc(date);
         OperationResultCode result{};
         if (FAILED(entry->get_ResultCode(&result))) { info.historyStatus = Status::Unavailable; return; }
-        info.lastInstallationResult = OperationName(result);
         if (result == orcSucceeded) info.lastInstallationSucceeded = Tri::Yes;
         else if (result == orcFailed || result == orcAborted || result == orcSucceededWithErrors)
             info.lastInstallationSucceeded = Tri::No;
@@ -204,8 +172,7 @@ void ReadPending(IUpdateSearcher* searcher, WindowsUpdateInfo& info) {
         if (item.title.empty()) item.title = L"Unnamed update";
         ComPtr<IUpdateIdentity> identity;
         if (SUCCEEDED(update->get_Identity(identity.GetAddressOf())) && identity &&
-            SUCCEEDED(identity->get_UpdateID(&id.value))) item.id = id.str();
-        if (!item.id.empty() && !seen.insert(ToLower(item.id)).second) continue;
+            SUCCEEDED(identity->get_UpdateID(&id.value)) && !id.str().empty() && !seen.insert(ToLower(id.str())).second) continue;
         ReadUpdateTypes(update.Get(), item);
         ComPtr<IUpdate3> modern;
         VARIANT_BOOL value = VARIANT_FALSE;
@@ -223,8 +190,6 @@ void ReadPending(IUpdateSearcher* searcher, WindowsUpdateInfo& info) {
                 }
             }
         }
-        if (item.optional == Tri::Yes) ++info.optionalCount;
-        else ++info.pendingCount;
         info.updates.push_back(std::move(item));
     }
     std::sort(info.updates.begin(), info.updates.end(), [](const auto& a, const auto& b) {
@@ -238,7 +203,7 @@ WindowsUpdateInfo CollectWindowsUpdateInfo() {
     info.services = CollectServices({L"wuauserv", L"BITS", L"UsoSvc", L"WaaSMedicSvc", L"DoSvc", L"CryptSvc", L"TrustedInstaller"});
     ComInit com;
     if (!com.ok()) { info.pendingReason = L"COM initialization failed."; return info; }
-    ReadDatesAndReboot(info);
+    ReadRebootState(info);
     ComPtr<IUpdateSession> session;
     HRESULT hr = ::CoCreateInstance(__uuidof(UpdateSession), nullptr, CLSCTX_INPROC_SERVER,
         __uuidof(IUpdateSession), reinterpret_cast<void**>(session.GetAddressOf()));

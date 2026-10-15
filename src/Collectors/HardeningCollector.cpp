@@ -25,7 +25,6 @@ std::expected<DWORD, Status> ReadDword(const wchar_t* path, const wchar_t* name)
 }
 SecuritySetting BooleanPolicy(const wchar_t* path, const wchar_t* name, bool inverted = false) {
     SecuritySetting setting;
-    setting.source = std::wstring(L"HKLM\\") + path + L"\\" + name;
     const auto value = ReadDword(path, name);
     setting.status = value ? (*value <= 1 ? Status::Success : Status::Error) : value.error();
     if (setting.status == Status::Success)
@@ -33,7 +32,6 @@ SecuritySetting BooleanPolicy(const wchar_t* path, const wchar_t* name, bool inv
     return setting;
 }
 void CollectLsaProtection(SecuritySetting& setting) {
-    setting.source = L"GetProcessInformation(ProcessProtectionLevelInfo) for lsass.exe";
     WinHandle snapshot(::CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
     if (!snapshot) { setting.status = StatusFromWin32(::GetLastError()); return; }
     PROCESSENTRY32W entry{sizeof(entry)};
@@ -69,7 +67,6 @@ void CollectAccounts(HardeningInfo& info) {
         info.lockoutWindow = lockout->usrmod3_lockout_observation_window;
     } else if (result == NERR_Success) info.lockoutStatus = Status::Unavailable;
 
-    info.guestDisabled.source = L"Local SAM account with RID 501 (NetUserEnum)";
     DWORD resume = 0;
     for (unsigned page = 0; page < 128; ++page) {
         NetBuffer users;
@@ -105,7 +102,6 @@ HardeningInfo CollectHardeningInfo() {
     info.inactivityStatus = inactivity ? Status::Success : inactivity.error();
     if (inactivity) info.inactivitySeconds = *inactivity;
     const auto autoplay = ReadDword(L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", L"NoDriveTypeAutoRun");
-    info.autoPlayDisabled.source = L"Device policy: NoDriveTypeAutoRun";
     info.autoPlayDisabled.status = autoplay ? Status::Success : autoplay.error();
     if (autoplay) info.autoPlayDisabled.enabled = ((*autoplay & 255) == 255) ? Tri::Yes : Tri::No;
     info.remoteAssistanceDisabled = BooleanPolicy(L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"fAllowToGetHelp", true);

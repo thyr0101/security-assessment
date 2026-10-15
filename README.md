@@ -14,7 +14,7 @@ It uses built-in Windows interfaces. It does not contact online services, run ex
 - **Account protection:** secure permission prompts, the built-in Guest account, account lockout, and Remote Assistance invitations.
 - **Windows Update:** pending updates, update services, restart requirements, and installation results. Pending updates are listed without affecting the score.
 
-The report also includes startup and threshold scan results. Privacy settings and minimum password length are not collected.
+The report also includes startup-location readability and threshold scan results. Privacy settings and minimum password length are not collected.
 
 ## Run an assessment
 
@@ -48,7 +48,7 @@ The prompt explains both formats. For scripts, specify the format directly (no p
 | `0` Compact | Numbered field keys with actual values; Boolean states use 0/1. Disabled = 0, enabled = 1, unknown = 2. | Yes |
 | `1` Readable | Descriptive field names and text states for manual inspection or other tools. | No |
 
-Omit the filename to generate one in the current folder. The destination folder must exist, and existing files are never overwritten. The command prints the saved file's path. Compact encoding is **not encryption**; both formats contain system details.
+Omit the filename to generate one in the current folder. The destination folder must exist, and existing files are never overwritten. The command prints the saved file's path. Both formats save the displayed report and recorded scores, excluding hidden inventories and internal evidence. Compact encoding is **not encryption**; both formats contain system details.
 
 ### View a saved JSON report
 

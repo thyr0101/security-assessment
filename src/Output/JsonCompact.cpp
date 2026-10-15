@@ -54,12 +54,14 @@ constexpr std::string_view legacyKeys[] = {
 // Version 2 uses decimal field IDs and literal text values. OS = 1, build = 2.
 // This order is a persisted format contract: append new fields, never reorder.
 constexpr auto keys = [] {
-    std::array<std::string_view, std::size(legacyKeys)> result{};
+    std::array<std::string_view, std::size(legacyKeys) + 2> result{};
     result[0] = "productName";
     result[1] = "build";
     size_t index = 2;
     for (const auto key : legacyKeys)
         if (key != "productName" && key != "build") result[index++] = key;
+    result[result.size() - 2] = "virtualizationAvailable";
+    result.back() = "promptOnSecureDesktop";
     return result;
 }();
 constexpr std::string_view categories[] = {"Hardware Security", "OS Security", "Windows Update", "Malware Protection",
@@ -86,7 +88,7 @@ Kind Type(std::string_view path) {
     if (std::ranges::find(tris, name) != std::end(tris)) return Kind::Tri;
     constexpr std::string_view booleans[] = {"cachedOnly", "sse", "sse2", "sse3", "ssse3", "sse41", "sse42",
         "avx", "avx2", "avx512f", "aesni", "sha", "vmx", "svm", "nx", "hypervisorPresent", "ecc", "present",
-        "ready", "readinessKnown", "vbsEnabled", "hvciEnabled", "credentialGuardRunning", "runningServicesKnown",
+        "virtualizationAvailable", "ready", "readinessKnown", "vbsEnabled", "hvciEnabled", "credentialGuardRunning", "runningServicesKnown",
         "smartAppControlEvaluation", "elevated", "installed", "realTimeProtection", "behaviorMonitor", "ioav",
         "cloudProtection", "threatsKnown", "tamperProtection", "hasThirdParty", "isDefender", "serviceRunning",
         "isNvme", "up", "dhcp", "exceeded", "registeredAntivirusScoring"};
@@ -95,7 +97,7 @@ Kind Type(std::string_view path) {
         "logicalProcessors", "physicalCores", "processorGroups", "maxMhz", "totalBytes", "availableBytes",
         "loadPercent", "capacity", "speed", "configuredSpeed", "threatsCount", "activeProfiles", "defaultInbound",
         "defaultOutbound", "index", "sizeBytes", "diskIndices", "freeBytes", "netbiosOptions", "rdpPort", "port",
-        "processId", "inactivitySeconds", "lmCompatibility", "lockoutThreshold", "lockoutDuration", "lockoutWindow",
+        "promptOnSecureDesktop", "processId", "inactivitySeconds", "lmCompatibility", "lockoutThreshold", "lockoutDuration", "lockoutWindow",
         "valueCount", "subkeyCount", "threshold", "fileCount", "dirCount", "total", "maximum", "maxPoints", "awardedPoints"};
     return std::ranges::find(numbers, name) != std::end(numbers) ? Kind::Number : Kind::Text;
 }

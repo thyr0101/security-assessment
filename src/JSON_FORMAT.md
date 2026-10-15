@@ -31,7 +31,7 @@ New exports use numbered fields with their actual values directly beside them. T
 
 `enabled` is Boolean for TPM, UAC, Defender and firewall profiles; it is tri-state for Secure Boot and general security settings. Text arrays contain actual strings, and numeric arrays such as disk indexes retain actual numbers. Native JSON booleans are not used in `d`.
 
-Warnings and application inventory are not exported. Scores are restored without rescoring. Input is limited to 64 MiB, nesting to 128 levels, expanded JSON to 128 MiB. Unknown keys and invalid state codes are rejected. Terminal control characters are escaped for display after import.
+Exports contain only console display inputs and recorded rule results. Hidden inventories, raw scoring-only evidence, provenance strings, rule reasons and non-exceeded successful threshold scans are omitted. Warnings and application inventory are not exported. Scores are restored without rescoring. Input is limited to 64 MiB, nesting to 128 levels, expanded JSON to 128 MiB. Unknown keys and invalid state codes are rejected. Terminal control characters are escaped for display after import.
 
 ## Previous compact backups
 
@@ -41,7 +41,7 @@ Compact encoding is not encryption or authentication. System details remain reco
 
 ## Fixed key table
 
-Key IDs are decimal strings starting at 1. This order is part of version 2: do not reorder it. New keys may only be appended; incompatible changes require a new version. The value-type rules are defined in `JsonCompact.cpp::Type`.
+Key IDs are decimal strings starting at 1. This order is part of version 2: do not reorder it. New keys may only be appended; incompatible changes require a new version. Keys for retired fields remain reserved for older backups and are never reused. Their presence in this table does not mean new exports contain them. The value-type rules are defined in `JsonCompact.cpp::Type`.
 
 | Key | Descriptive field |
 | --- | --- |
@@ -276,3 +276,5 @@ Key IDs are decimal strings starting at 1. This order is part of version 2: do n
 | `229` | `llmnr` |
 | `230` | `rdp` |
 | `231` | `rdpNla` |
+| `232` | `virtualizationAvailable` |
+| `233` | `promptOnSecureDesktop` |

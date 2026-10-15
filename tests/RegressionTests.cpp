@@ -58,10 +58,6 @@ static void TestRegistry(Fixture& fixture) {
         reinterpret_cast<const BYTE*>(bad), sizeof(bad)) == ERROR_SUCCESS, "write unterminated string");
     RegistryReader reader;
     Check(reader.Open(fixture.key.get(), L"", 0) == Status::Success, "open registry fixture");
-    std::vector<std::wstring> strings{L"old"};
-    Check(reader.GetMultiSz(L"bad", strings) == Status::Error, "unterminated multi-string must fail safely");
-    Check(reader.GetMultiSz(L"valid", strings) == Status::Success && strings == std::vector<std::wstring>{L"alpha", L"beta"},
-          "multi-string output must replace previous contents");
     std::wstring text;
     Check(reader.GetString(L"text", text) == Status::Success && text == L"ab", "bounded unterminated REG_SZ");
     Check(reader.GetString(L"missing", text) == Status::NotFound, "missing registry value status");
@@ -72,11 +68,7 @@ static void TestRegistry(Fixture& fixture) {
           "registry threshold counts");
     for (const auto& definition : DefaultRegistryScans())
         Check(!definition.name.empty() && definition.root && !definition.subkey.empty(), "no empty default registry definitions");
-    const wchar_t empty[] = L"";
-    Check(::RegSetValueExW(fixture.key.get(), L"empty", 0, REG_MULTI_SZ,
-        reinterpret_cast<const BYTE*>(empty), sizeof(empty)) == ERROR_SUCCESS, "write empty multi-string");
-    strings = {L"previous"};
-    Check(reader.GetMultiSz(L"empty", strings) == Status::Success && strings.empty(), "single-null empty REG_MULTI_SZ is valid");
+
 }
 
 static void TestFiles(Fixture& fixture) {
@@ -85,13 +77,10 @@ static void TestFiles(Fixture& fixture) {
     fs::create_directory(fixture.dir / L"nested");
     std::ofstream(fixture.dir / L"nested" / L"second.exe", std::ios::binary) << "";
     fs::create_directory(fixture.dir / L"directory.exe");
-    const std::wstring digest = L"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
-    Check(FileSha256(app.wstring()) == digest, "SHA-256 known vector");
-    Check(!FileSha256((fixture.dir / L"missing").wstring()), "missing hash input");
     const auto scans = RunDirectoryScans({{L"flat", fixture.dir.wstring(), 1, false},
         {L"recursive", fixture.dir.wstring(), 1, true}, {L"missing", (fixture.dir / L"missing").wstring(), 0, false}});
     Check(scans[0].fileCount == 1 && !scans[0].exceeded, "flat directory scan");
-    Check(scans[1].fileCount == 2 && scans[1].dirCount == 2 && scans[1].exceeded, "recursive directory scan");
+    Check(scans[1].fileCount == 2 && scans[1].exceeded, "recursive directory scan");
     Check(scans[2].status == Status::NotFound, "missing directory status");
 }
 
@@ -105,8 +94,6 @@ static WindowsUpdateInfo HealthyWindowsUpdate() {
     update.status = update.pendingStatus = update.historyStatus = update.services.status = Status::Success;
     update.rebootRequired = Tri::No;
     update.lastInstallationSucceeded = Tri::Yes;
-    update.lastInstallationResult = L"Succeeded";
-    update.lastSearchUtc = L"2026-10-14T10:00:00Z";
     for (const auto* name : {L"wuauserv", L"BITS", L"UsoSvc"}) {
         ServiceEntry service;
         service.name = name; service.state = L"Stopped"; service.startType = L"Manual"; service.status = Status::Success;
@@ -123,7 +110,7 @@ static void TestScoreAndJson() {
     result.os.status = result.cpu.status = Status::Success;
     result.os.build = 26100; result.os.ubr = 1;
     result.windowsUpdate = HealthyWindowsUpdate();
-    result.cpu.vmx = result.cpu.aesni = result.cpu.nx = true;
+    result.cpu.virtualizationAvailable = result.cpu.aesni = result.cpu.nx = true;
     auto& s = result.security;
     s.tpm.status = Status::Success; s.tpm.present = s.tpm.ready = true; s.tpm.specVersion = L"2.0";
     s.secureBoot.enabled = Tri::Yes;
@@ -132,7 +119,7 @@ static void TestScoreAndJson() {
     s.virt.runningServicesKnown = s.virt.vbsEnabled = s.virt.hvciEnabled = s.virt.credentialGuardRunning = true;
     s.uac.status = Status::Success; s.uac.enabled = s.uac.consentPromptAdmin = true; s.uac.promptOnSecureDesktop = 1;
     s.dep.depEnabled = s.dep.sehopEnabled = Tri::Yes;
-    s.smartAppControlOn = s.isElevated = s.windowsHelloAvailable = true;
+    s.smartAppControlOn = s.isElevated = true;
     auto& d = result.defender;
     d.status = Status::Success;
     d.enabledStatus = d.realTimeProtectionStatus = d.behaviorMonitorStatus = d.ioavStatus =
@@ -190,13 +177,15 @@ static void TestScoreAndJson() {
     Check(Rule(ComputeScore(result), "mp.threats").awardedPoints == 0 &&
           Rule(ComputeScore(result), "mp.threats").state == "Threats found", "active threats earn zero with a clear state");
     d.threatsCount = 0;
-    for (const auto* id : {"hw.tpm2", "hw.virt", "hw.aes", "hw.nx", "hw.vbs", "hw.hvci", "os.win11",
-                           "os.patch", "mp.defender", "mp.threats", "net.in", "net.svc", "enc.bl", "enc.tpm",
-                           "acc.uac2", "acc.elev", "acc.hello", "hyg.startup"}) {
+    for (const auto* id : {"hw.tpm2", "hw.vbs", "hw.hvci", "os.win11",
+                           "mp.defender", "mp.threats", "net.in", "net.svc", "enc.bl", "enc.tpm",
+                           "acc.uac2", "hyg.startup"}) {
         Check(Rule(healthy, id).state != "Enabled", "capabilities, facts, and scan results do not use Enabled");
     }
     int sum = 0; for (const auto& rule : healthy.rules) sum += rule.awardedPoints;
     Check(sum == healthy.total, "rule sum matches score");
+    s.tpm.specVersion.clear();
+    Check(Rule(ComputeScore(result), "hw.tpm2").awardedPoints == 15, "empty TPM version never earns TPM 2.0 credit");
     s.tpm.specVersion = L"1.2";
     Check(Rule(ComputeScore(result), "hw.tpm2").awardedPoints == 15, "TPM 1.2 must not earn TPM 2.0 points");
     s.tpm.specVersion = L"12.0";
@@ -208,7 +197,7 @@ static void TestScoreAndJson() {
     s.virt.runningServicesKnown = false;
     Check(Rule(ComputeScore(result), "hw.hvci").state == "Unknown", "configured HVCI is not running evidence");
     result.os.productName = L"quoted \"name\"";
-    result.hardening.lsaProtection.reason = L"tabs\tand\nnewlines";
+    result.defender.reason = L"tabs\tand\nnewlines";
     result.score = ComputeScore(result);
     const auto json = RenderJson(result);
     Check(json.find("quoted \\\"name\\\"") != std::string::npos, "score strings are JSON escaped");
@@ -223,27 +212,18 @@ static void TestWindowsUpdate() {
     result.windowsUpdate = HealthyWindowsUpdate();
     auto score = ComputeScore(result);
     Check(score.maximum == 1000, "Windows Update category preserves the 1000-point maximum");
-    Check(Rule(score, "os.patch").category == "Windows Update" && Rule(score, "os.patch").maxPoints == 0,
-          "update metadata retain their stable ID without earning security points");
     int categoryMax = 0, categoryAward = 0;
     for (const auto& rule : score.rules) if (rule.category == "Windows Update") {
         categoryMax += rule.maxPoints; categoryAward += rule.awardedPoints;
     }
     Check(categoryMax == 60 && categoryAward == 60, "healthy Windows Update receives all 60 scored points");
     const int baselineScore = score.total;
-    for (unsigned count : {0u, 1u, 2u, 3u, 7u, 8u, 9u, UINT_MAX}) {
-        result.windowsUpdate.pendingCount = count;
-        const auto report = ComputeScore(result);
-        const auto& rule = Rule(report, "wu.pending");
-        Check(rule.awardedPoints == 0 && rule.maxPoints == 0 && report.total == baselineScore,
-              "pending counts through overflow boundaries are informational and never change score");
+    for (unsigned count : {0u, 1u, 2u, 3u, 7u, 8u, 9u}) {
+        result.windowsUpdate.updates.resize(count);
+        Check(ComputeScore(result).total == baselineScore, "pending updates are informational and never change score");
     }
-    result.windowsUpdate.pendingCount = 1;
-    result.windowsUpdate.optionalCount = 12;
-    Check(ComputeScore(result).total == baselineScore, "pending and optional updates do not reduce score");
     result.windowsUpdate.pendingStatus = Status::AccessDenied;
-    Check(Rule(ComputeScore(result), "wu.pending").state == "Unknown" &&
-          ComputeScore(result).total == baselineScore, "failed pending search stays unknown without changing score");
+    Check(ComputeScore(result).total == baselineScore, "failed pending search does not change the score");
     result.windowsUpdate.pendingStatus = Status::Success;
     auto& service = result.windowsUpdate.services.entries[0];
     Check(Rule(ComputeScore(result), "wu.service.wuauserv").awardedPoints == 10, "idle manual update service is available on demand");
@@ -263,17 +243,17 @@ static void TestWindowsUpdate() {
     result.windowsUpdate.lastInstallationSucceeded = Tri::Yes; result.windowsUpdate.historyStatus = Status::AccessDenied;
     Check(Rule(ComputeScore(result), "wu.history").state == "Unknown", "unreadable history cannot earn stale credit");
     result.windowsUpdate = HealthyWindowsUpdate();
-    result.windowsUpdate.pendingCount = 1;
+
     WindowsUpdateItem item;
-    item.title = L"Pending \"Windows\" update"; item.id = L"update-id"; item.kbArticles = {L"1234567"};
+    item.title = L"Pending \"Windows\" update"; item.kbArticles = {L"1234567"};
     item.optional = Tri::No; item.downloaded = Tri::Yes;
     item.updateType = L"Software"; item.classifications = {L"Security Updates"};
     item.products = {L"Microsoft .NET Framework"}; item.severity = L"Critical";
     result.windowsUpdate.updates.push_back(item);
     WindowsUpdateItem optional = item;
-    optional.id = L"optional-id"; optional.title = L"Optional driver"; optional.optional = Tri::Yes;
+    optional.title = L"Optional driver"; optional.optional = Tri::Yes;
     optional.updateType = L"Driver"; optional.classifications.clear(); optional.products.clear(); optional.severity.clear();
-    result.windowsUpdate.updates.push_back(optional); result.windowsUpdate.optionalCount = 1;
+    result.windowsUpdate.updates.push_back(optional);
     result.windowsUpdate.services.entries[0].displayName = L"Windows Update";
     result.score = ComputeScore(result);
     std::ofstream("windows-update-output.json", std::ios::binary) << RenderJson(result);
@@ -294,7 +274,7 @@ static void TestWindowsUpdate() {
     const size_t metadata = captured.str().find(L"Windows update details available", scoreStart);
     Check(scoreStart != std::wstring::npos && updateGroup != std::wstring::npos && metadata == std::wstring::npos,
           "informational update metadata do not appear in the scored breakdown");
-    result.windowsUpdate.updates.clear(); result.windowsUpdate.pendingCount = result.windowsUpdate.optionalCount = 0;
+    result.windowsUpdate.updates.clear();
     captured.str(L""); captured.clear(); old = std::wcout.rdbuf(captured.rdbuf());
     try { RenderConsole(result); } catch (...) { std::wcout.rdbuf(old); throw; }
     std::wcout.rdbuf(old);
@@ -519,13 +499,12 @@ static void TestHardeningAndWarnings() {
     const auto nativeTpm = ComputeScore(result);
     Check(Rule(nativeTpm, "hw.tpm2").state == "Readiness unknown" && Rule(nativeTpm, "enc.tpm").awardedPoints == 40,
           "native TPM presence does not invent verified readiness");
-    result.network.adapters.push_back(NetworkAdapterInfo{}); result.network.adapters.back().name = L"PRIVATE_ADAPTER_SENTINEL";
-    result.network.adapters.back().up = true;
+    result.network.adapters.push_back(NetworkAdapterInfo{});
     result.score = ComputeScore(result);
     const auto console = CaptureConsole(result);
     Check(console.find(L"Rule breakdown") < console.find(L"SECURITY SCORE") && console.find(L"SECURITY SCORE") < console.find(L"-- Warnings"),
           "report ends with breakdown, score, then warnings");
-    for (const auto* hidden : {L"Active Network Adapters", L"PRIVATE_ADAPTER_SENTINEL", L"Local TCP Listeners", L"UDP Port 69", L"Configured RDP port", L"RDP scope"})
+    for (const auto* hidden : {L"Active Network Adapters", L"Local TCP Listeners", L"UDP Port 69", L"Configured RDP port", L"RDP scope"})
         Check(console.find(hidden) == std::wstring::npos, "removed console inventories stay hidden");
     Check(console.find(L"Critical") != std::wstring::npos && console.find(L"verification gap") != std::wstring::npos,
           "console distinguishes critical findings from unverified coverage");
@@ -561,14 +540,14 @@ static void TestJsonFiles(Fixture& fixture) {
     result.os.computerName = L"SAVED_COMPUTER";
     result.os.build = 26100;
     result.cpu.brand = L"SAVED_CPU";
-    result.cpu.hypervisorPresent = true;
+    result.cpu.virtualizationAvailable = true;
     result.memory.totalBytes = 32ull << 30;
     result.memory.availableBytes = 12ull << 30;
     result.windowsUpdate = HealthyWindowsUpdate();
     WindowsUpdateItem update;
     update.title = L"SAVED_SECURITY_UPDATE"; update.classifications = {L"Security Updates"};
     update.products = {L"Microsoft .NET"}; update.kbArticles = {L"1234567"}; update.optional = Tri::No;
-    result.windowsUpdate.updates.push_back(update); result.windowsUpdate.pendingCount = 1;
+    result.windowsUpdate.updates.push_back(update);
     StorageDisk disk; disk.index = 3; disk.model = L"SAVED_DISK"; disk.sizeBytes = 1ull << 40;
     result.storage.disks.push_back(disk);
     StorageVolume volume; volume.mountPoint = L"Z:\\"; volume.diskIndices = {3}; volume.bitLockerState = L"On";
@@ -577,6 +556,8 @@ static void TestJsonFiles(Fixture& fixture) {
     FirewallProfile profile; profile.name = L"Domain"; profile.status = Status::Success;
     profile.enabled = true; profile.defaultInbound = 0; profile.defaultOutbound = 1;
     result.firewall.profiles.push_back(profile);
+    result.security.uac.enabled = true; result.security.uac.status = Status::Success;
+    result.security.uac.promptOnSecureDesktop = 1;
     result.score.total = 321; // A recorded score must never be recomputed during viewing.
     Check(!result.score.warnings.empty(), "fixture has live warnings to exclude");
     const auto text = RenderJson(result);
@@ -585,6 +566,10 @@ static void TestJsonFiles(Fixture& fixture) {
     Check(compact.find("\"s\":") == std::string::npos && compact.find("\"1\":\"quoted") != std::string::npos,
           "compact fields store literal values without a string table");
     Check(compact.find("\"2\":26100") != std::string::npos, "build has decimal field ID 2");
+    for (const auto* hidden : {"source", "adapters", "endpoints", "rdpPort", "modules", "maxMhz",
+                               "volumeId", "startType", "threatsCount", "persistence", "rebootRequired"})
+        Check(text.find(std::string("\"") + hidden + "\":") == std::string::npos,
+              "hidden inventory and raw scoring evidence are not serialized");
     Check(text.find("\"warnings\"") == std::string::npos, "JSON exports omit warnings by default");
     Check(text.find("\"applications\"") == std::string::npos, "JSON exports omit removed applications");
     Check(std::ranges::none_of(result.score.rules, [](const auto& rule) { return rule.id == "hyg.appinv"; }),
@@ -661,7 +646,7 @@ static void TestJsonFiles(Fixture& fixture) {
         coded.firewall.activeProfilesStatus = status;
         coded.network.rdp.status = status;
         coded.os.computerName = L"Enabled";
-        NetworkAdapterInfo adapter; adapter.netbiosOptions = 0; adapter.ipv4 = {L"192.0.2.1", L"192.0.2.2"}; adapter.dns = {L"192.0.2.53"};
+        NetworkAdapterInfo adapter; adapter.netbiosOptions = 0;
         coded.network.adapters.push_back(adapter);
         for (const auto tri : {Tri::Yes, Tri::No, Tri::Unknown, Tri::NotApplicable}) {
             coded.security.secureBoot.enabled = tri;
@@ -674,6 +659,7 @@ static void TestJsonFiles(Fixture& fixture) {
     }
     for (const auto state : {AntivirusState::Unknown, AntivirusState::Enabled, AntivirusState::Disabled, AntivirusState::Snoozed, AntivirusState::Expired}) {
         auto coded = result;
+        coded.score.registeredAntivirusScoring = true;
         AntivirusProduct product; product.name = L"State fixture"; product.state = state;
         coded.antivirus.products.push_back(product);
         std::ofstream(bad, std::ios::binary) << RenderJson(coded, JsonFormat::Compact);

@@ -66,6 +66,28 @@ def export_report(app, *options):
         return report, elapsed
 
 
+
+def assert_no_hidden_fields(report):
+    hidden = {'source', 'adapters', 'endpoints', 'endpointScope', 'rdpPort', 'rdpPortStatus',
+              'tcp4Status', 'tcp6Status', 'udp4Status', 'udp6Status', 'modules', 'maxMhz',
+              'processorGroups', 'volumeId', 'driveType', 'bitLockerStatus', 'protectionMethod',
+              'encryptionPercentage', 'subkeyCount', 'dirCount', 'command', 'location',
+              'cachedOnly', 'lastSearchUtc', 'lastInstallationUtc', 'lastInstallationTitle',
+              'lastInstallationResult', 'pendingCount', 'optionalCount', 'startType',
+              'threatsCount', 'threatsKnown', 'manufacturerId', 'persistence', 'persistenceStatus'}
+    def check(value):
+        if isinstance(value, dict):
+            assert not hidden.intersection(value), hidden.intersection(value)
+            for child in value.values():
+                check(child)
+        elif isinstance(value, list):
+            for child in value:
+                check(child)
+    check(report)
+    assert 'services' not in report
+    assert all('reason' not in rule for rule in report['score']['rules'])
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('binary_dir', type=Path)
@@ -77,8 +99,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix='sa-smoke-', dir=binaries.parent) as scratch:
         output, _ = run(tests, cwd=scratch)
         fixture = json.loads((Path(scratch) / 'regression-output.json').read_text(encoding='utf-8'))
+        assert_no_hidden_fields(fixture)
         assert fixture['system']['productName'] == 'quoted "name"'
-        assert fixture['hardening']['lsaProtection']['reason'] == 'tabs\tand\nnewlines'
+        assert fixture['defender']['reason'] == 'tabs\tand\nnewlines'
         assert 'privacy' not in fixture
         assert all(rule['id'] != 'acc.password' for rule in fixture['score']['rules'])
         evaluation = json.loads((Path(scratch) / 'evaluation-output.json').read_text(encoding='utf-8'))
@@ -86,36 +109,33 @@ def main():
         assert evaluation_rules['os.sac']['awardedPoints'] == 25 and evaluation_rules['os.sac']['maxPoints'] == 50
         assert evaluation_rules['os.sac']['state'] == 'Evaluation'
         assert evaluation_rules['mp.threats']['awardedPoints'] == 20 and evaluation_rules['mp.threats']['state'] == 'Clear'
-        assert evaluation_rules['os.patch']['description'] == 'Windows update details available'
-        assert evaluation_rules['os.patch']['state'] == 'Available'
+        assert 'os.patch' not in evaluation_rules
         assert sum(rule['maxPoints'] for rule in evaluation_rules.values() if rule['category'] == 'OS Security') == 200
         assert sum(rule['maxPoints'] for rule in evaluation_rules.values() if rule['category'] == 'Windows Update') == 60
         assert sum(rule['maxPoints'] for rule in evaluation_rules.values() if rule['id'].startswith('mp.')) == 180
         antivirus = json.loads((Path(scratch) / 'antivirus-output.json').read_text(encoding='utf-8'))
-        assert antivirus['antivirus']['hasThirdParty'] is True
+        assert any(not p['isDefender'] for p in antivirus['antivirus']['products'])
         assert antivirus['defender']['periodicScanning'] == 'Yes'
         assert [p['awardedPoints'] for p in antivirus['score']['antivirusScores']] == [180, 0, 0]
-        assert antivirus['score']['antivirusScores'][0]['name'] == 'Example "Antivirus" A'
+        assert antivirus['antivirus']['products'][0]['name'] == 'Example "Antivirus" A'
         assert antivirus['score']['total'] == 180 and antivirus['score']['maximum'] == 1000
         partial = json.loads((Path(scratch) / 'partial-output.json').read_text(encoding='utf-8'))
         assert partial['defender']['cloudProtectionStatus'] == 'Success'
         assert partial['defender']['realTimeProtectionStatus'] == 'Unavailable'
-        assert partial['servicesStatus'] == 'Error' and partial['persistenceStatus'] == 'Error'
+        assert next(r for r in partial['score']['rules'] if r['id'] == 'hyg.startup')['state'] == 'Unknown'
         updates = json.loads((Path(scratch) / 'windows-update-output.json').read_text(encoding='utf-8'))
-        assert updates['windowsUpdate']['pendingCount'] == 1 and updates['windowsUpdate']['cachedOnly'] is True
+        assert updates['windowsUpdate']['pendingStatus'] == 'Success'
         assert updates['windowsUpdate']['updates'][0]['title'] == 'Pending "Windows" update'
         assert updates['windowsUpdate']['updates'][0]['kbArticles'] == ['1234567']
         update_rules = {rule['id']: rule for rule in updates['score']['rules']}
-        assert update_rules['wu.pending']['awardedPoints'] == 0 and update_rules['wu.pending']['maxPoints'] == 0
+        assert 'wu.pending' not in update_rules
         assert updates['windowsUpdate']['updates'][0]['classifications'] == ['Security Updates']
         assert updates['windowsUpdate']['updates'][0]['products'] == ['Microsoft .NET Framework']
         assert updates['windowsUpdate']['updates'][0]['severity'] == 'Critical'
         assert updates['windowsUpdate']['updates'][1]['updateType'] == 'Driver'
-        assert update_rules['os.patch']['category'] == 'Windows Update'
         unknown_updates = json.loads((Path(scratch) / 'windows-update-unknown.json').read_text(encoding='utf-8'))
-        assert unknown_updates['windowsUpdate']['pendingCount'] is None
-        assert unknown_updates['windowsUpdate']['optionalCount'] is None
-        assert next(rule for rule in unknown_updates['score']['rules'] if rule['id'] == 'wu.pending')['awardedPoints'] == 0
+        assert unknown_updates['windowsUpdate']['pendingStatus'] != 'Success'
+        assert 'pendingCount' not in unknown_updates['windowsUpdate']
         print(output.strip())
 
     help_text, _ = run(app, '--help')
@@ -124,27 +144,22 @@ def main():
     assert invalid.returncode == 2 and b'Unknown option:' in invalid.stderr and not invalid.stdout
     report, no_hash_time = export_report(app, '--no-hash')
     expected = {'system', 'hardware', 'security', 'defender', 'firewall', 'storage', 'network',
-                'services', 'registryFindings', 'directoryFindings', 'persistence', 'score', 'windowsUpdate'}
+                'antivirus', 'hardening', 'registryFindings', 'directoryFindings', 'score', 'windowsUpdate'}
     assert expected <= report.keys()
     assert report['score']['maximum'] == sum(r['maxPoints'] for r in report['score']['rules']) == 1000
     assert report['score']['total'] == sum(r['awardedPoints'] for r in report['score']['rules'])
-    assert 'antivirus' in report and 'periodicScanning' in report['defender']
-    assert len(report['antivirus']['products']) == len(report['score']['antivirusScores'])
-    for product, score in zip(report['antivirus']['products'], report['score']['antivirusScores']):
+    registered = report['score']['registeredAntivirusScoring']
+    products = report['antivirus'].get('products', [])
+    assert ('periodicScanning' in report['defender']) == any(not p['isDefender'] for p in products)
+    assert len(products) == len(report['score'].get('antivirusScores', []))
+    for product, score in zip(products, report['score'].get('antivirusScores', [])):
         assert score['maxPoints'] == 180
         assert score['awardedPoints'] == (180 if product['status'] == 'Success' and product['state'] == 'Enabled' else 0)
     rules = {rule['id']: rule for rule in report['score']['rules']}
-    assert rules['os.patch']['category'] == 'Windows Update'
+    assert 'os.patch' not in rules and 'wu.pending' not in rules
     assert sum(rule['maxPoints'] for rule in rules.values() if rule['category'] == 'Windows Update') == 60
-    assert rules['wu.pending']['maxPoints'] == 0 and rules['wu.pending']['awardedPoints'] == 0
-    updates = report['windowsUpdate']
-    assert updates['cachedOnly'] is True
-    if updates['pendingStatus'] == 'Success':
-        assert updates['pendingCount'] == sum(item['optional'] == 'No' for item in updates['updates'])
-        assert updates['optionalCount'] == sum(item['optional'] == 'Yes' for item in updates['updates'])
-        assert rules['wu.pending']['awardedPoints'] == 0
-    else:
-        assert updates['pendingCount'] is None and rules['wu.pending']['state'] == 'Unknown'
+    assert all(r['maxPoints'] or r['id'] == 'hyg.startup' for r in rules.values())
+    assert_no_hidden_fields(report)
     assert rules['os.sac']['maxPoints'] == 50
     if rules['os.sac']['state'] == 'Evaluation':
         assert rules['os.sac']['awardedPoints'] == 25
@@ -158,9 +173,10 @@ def main():
     for field, rule_id in [('enabled', 'mp.defender'), ('realTimeProtection', 'mp.rtp'),
                            ('behaviorMonitor', 'mp.bm'), ('ioav', 'mp.ioav'),
                            ('cloudProtection', 'mp.cloud'), ('tamperProtection', 'mp.tamper')]:
-        if rule_id in rules and report['defender'][field + 'Status'] != 'Success':
+        if rule_id in rules and report['defender'].get(field + 'Status', 'Unavailable') != 'Success':
             assert rules[rule_id]['state'] == 'Unknown' and rules[rule_id]['awardedPoints'] == 0
-    assert len({s['name'].lower() for s in report['services']}) == len(report['services'])
+    services = report['windowsUpdate']['services']
+    assert len({s['name'].lower() for s in services}) == len(services)
     assert all(f['name'] for f in report['registryFindings'])
     assert 'applications' not in report
     assert 'hyg.appinv' not in rules
@@ -222,15 +238,15 @@ def main():
     print(f"Elapsed: --no-hash {no_hash_time:.3f}s; default {default_time:.3f}s (single runs, not a benchmark).")
     if args.baseline:
         with tempfile.TemporaryDirectory(prefix='sa-baseline-') as folder:
-            baseline_text, elapsed = run(args.baseline.resolve(), '--json', '--no-hash', cwd=folder)
-            if baseline_text.lstrip().startswith('{'):
-                baseline = json.loads(baseline_text)
-            else:
-                exported = list(Path(folder).glob('security-assessment-*.json'))
-                assert len(exported) == 1
-                baseline = json.loads(exported[0].read_text(encoding='utf-8'))
-            assert baseline.keys() - {'privacy', 'applications'} <= report.keys()
-            print(f"Baseline export: {elapsed:.3f}s; retained report sections preserved.")
+            baseline_path = Path(folder) / 'baseline.json'
+            run(args.baseline.resolve(), '--json', '1', str(baseline_path))
+            baseline = json.loads(baseline_path.read_text(encoding='utf-8'))
+            old = {r['id']: r for r in baseline['score']['rules'] if r['maxPoints']}
+            new = {r['id']: r for r in report['score']['rules'] if r['maxPoints']}
+            assert old.keys() == new.keys()
+            assert all(old[k]['maxPoints'] == new[k]['maxPoints'] for k in old)
+            print('Baseline comparison: all scored rules and weights retained.')
+
 
 
 

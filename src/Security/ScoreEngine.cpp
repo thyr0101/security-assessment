@@ -132,7 +132,6 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
     auto& D = a.defender;
     auto& F = a.firewall;
     auto& O = a.os;
-    auto& C = a.cpu;
 
     // ---- Hardware Security (max 150) ----
     rep.rules.push_back(S.secureBoot.enabled == Tri::Yes
@@ -143,7 +142,7 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
                "Secure Boot is not enabled or could not be verified."));
 
     if (S.tpm.present && S.tpm.ready) {
-        const bool v2 = Trim(Split(S.tpm.specVersion, L',').front()) == L"2.0";
+        const bool v2 = Trim(S.tpm.specVersion.substr(0, S.tpm.specVersion.find(L','))) == L"2.0";
         rep.rules.push_back(v2
             ? Full({ "hw.tpm2", "Security chip ready (TPM 2.0)", 30, Category::HardwareSecurity }, "TPM 2.0 is present and ready.", "Ready")
             : Partial({ "hw.tpm2", "Security chip ready (TPM 2.0)", 30, Category::HardwareSecurity }, 15,
@@ -158,28 +157,12 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
                                  "No usable TPM detected."));
     }
 
-    rep.rules.push_back(CpuVirtualizationAvailable(C)
-        ? Full({ "hw.virt", "CPU virtualization support", 0, Category::HardwareSecurity },
-               "CPU virtualization support is available.", "Supported")
-        : Zero({ "hw.virt", "CPU virtualization support", 0, Category::HardwareSecurity }, "Absent",
-               "CPU virtualization extensions not reported."));
-
-    rep.rules.push_back(C.aesni
-        ? Full({ "hw.aes", "Hardware encryption support (AES-NI)", 0, Category::HardwareSecurity },
-               "The CPU supports hardware acceleration for AES encryption.", "Supported")
-        : Zero({ "hw.aes", "Hardware encryption support (AES-NI)", 0, Category::HardwareSecurity }, "Absent", "AES-NI not reported."));
-
-    rep.rules.push_back(C.nx
-        ? Full({ "hw.nx", "CPU memory protection (NX/XD)", 0, Category::HardwareSecurity },
-               "The CPU can prevent code execution in memory areas reserved for data.", "Supported")
-        : Zero({ "hw.nx", "CPU memory protection (NX/XD)", 0, Category::HardwareSecurity }, "Absent", "NX/XD not reported."));
-
     if (S.virt.vbsEnabled)
         rep.rules.push_back(Full({ "hw.vbs", "Security features isolated from Windows", 30, Category::HardwareSecurity },
                                  "Windows uses virtualization to isolate security functions.", "Running"));
     else
         rep.rules.push_back(Zero({ "hw.vbs", "Security features isolated from Windows", 30, Category::HardwareSecurity },
-                                 S.virt.deviceGuardAvailable ? "Not running" : "Unknown",
+                                 (S.virt.status == Status::Success) ? "Not running" : "Unknown",
                                  "VBS not detected as running."));
 
     if (S.virt.hvciEnabled)
@@ -231,23 +214,7 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
                                  "Smart App Control not enforcing."));
 
     // ---- Windows Update (max 60; pending updates are informational) ----
-    // Preserve the existing rule ID while moving it to the new category.
-    rep.rules.push_back(O.ubr > 0
-        ? Full({ "os.patch", "Windows update details available", 0, Category::WindowsUpdate },
-               "Windows reported its installed update revision. This does not verify that the latest updates are installed.", "Available")
-        : Zero({ "os.patch", "Windows update details available", 0, Category::WindowsUpdate }, "Unknown",
-               "Windows update revision could not be read."));
-
     const auto& U = a.windowsUpdate;
-    const R pending{"wu.pending", "Pending Windows updates", 0, Category::WindowsUpdate};
-    if (U.pendingStatus != Status::Success)
-        rep.rules.push_back(Zero(pending, "Unknown", "Pending updates could not be read reliably from Windows Update Agent."));
-    else {
-        rep.rules.push_back(Partial(pending, 0,
-            U.pendingCount ? std::to_string(U.pendingCount) + " pending" : "None cached",
-            "Local Windows Update cache: " + std::to_string(U.pendingCount) +
-            " non-optional updates pending. Pending and optional updates are informational and do not affect the score."));
-    }
     for (const auto& [name, label] : {std::pair{L"wuauserv", "Windows Update service available"},
              std::pair{L"BITS", "Update download service available"},
              std::pair{L"UsoSvc", "Update scheduling service available"}}) {
@@ -424,7 +391,6 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
     bool haveAdapter = false, netbiosUnknown = N.status != Status::Success;
     bool netbiosEnabled = false, netbiosDhcp = false;
     for (const auto& adapter : N.adapters) {
-        if (!adapter.up || adapter.isLoopback || adapter.ipv4.empty()) continue;
         haveAdapter = true;
         if (adapter.netbiosStatus != Status::Success || adapter.netbiosOptions > 2) netbiosUnknown = true;
         else if (adapter.netbiosOptions == 1) netbiosEnabled = true;
@@ -497,22 +463,6 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
                                  "Not required",
                                  "UAC prompt not required for admin actions."));
 
-    rep.rules.push_back(S.isElevated
-        ? Full({ "acc.elev", "Assessment has administrator access", 0,
-                 Category::AccountSecurity },
-               "The assessment is running with administrator access to read restricted system information.", "Granted")
-        : Partial({ "acc.elev", "Assessment has administrator access", 0, Category::AccountSecurity }, 0,
-                  "Not granted",
-                  "Run as administrator to allow restricted system checks."));
-
-    if (S.windowsHelloAvailable)
-        rep.rules.push_back(Full({ "acc.hello", "Windows Hello sign-in support", 0,
-                                   Category::AccountSecurity },
-                                 "Windows Hello sign-in components were detected.", "Available"));
-    else
-        rep.rules.push_back(Zero({ "acc.hello", "Windows Hello sign-in support", 0, Category::AccountSecurity }, "Unknown",
-                                 "Windows Hello availability not detected."));
-
     const auto& H = a.hardening;
     auto protection = [&](const char* id, const char* label, int points, Category category,
                           const SecuritySetting& value, const char* success, const char* failure,
@@ -561,22 +511,18 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
         : Zero(lockout, H.lockoutThreshold ? "High threshold" : "Not configured", "The local account lockout threshold is absent or exceeds 10 failed attempts."));
 
     // ---- Hardening / Software Hygiene (informational) ----
-    rep.rules.push_back(a.persistence.status != Status::Success
-        ? Zero({ "hyg.startup", "Startup application scan", 0, Category::SoftwareHygiene },
-               "Unknown", "Startup inventory could not be completed.")
-        : a.persistence.entries.empty()
-        ? Full({ "hyg.startup", "Startup application scan", 0, Category::SoftwareHygiene },
-               "The selected startup locations were checked; no entries were found.", "Complete")
-        : Full({ "hyg.startup", "Startup application scan", 0, Category::SoftwareHygiene },
-               std::to_string(a.persistence.entries.size()) + " startup entries found in the selected locations.", "Complete"));
+    rep.rules.push_back(a.persistence.status == Status::Success
+        ? Full({"hyg.startup", "Startup locations readable", 0, Category::SoftwareHygiene},
+            "The selected startup locations are readable.", "Available")
+        : Zero({"hyg.startup", "Startup locations readable", 0, Category::SoftwareHygiene},
+            "Unknown", "The selected startup locations could not all be checked."));
 
     // Failed collection must not become a definite disabled/absent state or earn points.
     for (auto& rule : rep.rules) {
         bool unknown = false;
         if (rule.id.starts_with("mp.") && rule.id != "mp.registered") unknown = D.status != Status::Success;
-        else if (rule.id.starts_with("os.win") || rule.id == "os.patch") unknown = O.status != Status::Success;
+        else if (rule.id.starts_with("os.win")) unknown = O.status != Status::Success;
         else if (rule.id == "os.uac" || rule.id == "acc.uac2") unknown = S.uac.status != Status::Success;
-        else if (rule.id == "hw.virt" || rule.id == "hw.aes" || rule.id == "hw.nx") unknown = C.status != Status::Success;
         else if (rule.id == "hw.tpm2" || rule.id == "enc.tpm")
             unknown = S.tpm.status != Status::Success && S.tpm.status != Status::NotFound;
         else if (rule.id == "hw.vbs") unknown = S.virt.status != Status::Success;

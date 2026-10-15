@@ -4,14 +4,11 @@
 #include <windows.h>
 #include <winioctl.h>
 #include <ntddstor.h>
-#include <setupapi.h>
-#include <devguid.h>
 #include <vector>
 #include <algorithm>
 #include <cstring>
 #include <comdef.h>
 #include <wrl/client.h>
-#pragma comment(lib, "setupapi.lib")
 
 namespace sa {
 
@@ -89,11 +86,8 @@ static void CollectPhysicalDisks(StorageInfo& s) {
         };
         disk.vendor = readString(d->VendorIdOffset);
         disk.model = readString(d->ProductIdOffset);
-        disk.firmware = readString(d->ProductRevisionOffset);
-        disk.serial = readString(d->SerialNumberOffset);
         disk.busType = BusTypeName(d->BusType);
-        disk.isNvme = (d->BusType == BusTypeNvme);
-        disk.mediaType = disk.isNvme ? L"SSD" : L"Unknown";
+        disk.mediaType = d->BusType == BusTypeNvme ? L"SSD" : L"Unknown";
 
         // Seek penalty reveals SSD vs HDD on many drives
         DEVICE_SEEK_PENALTY_DESCRIPTOR spd{};
@@ -296,7 +290,7 @@ static void CollectBitLocker(StorageInfo& s) {
         return;
     }
     WmiObjects objects;
-    const Status queryStatus = wmi.Query(L"SELECT * FROM Win32_EncryptableVolume", objects.items(), &why);
+    const Status queryStatus = wmi.Query(L"SELECT DeviceID,ProtectionStatus,EncryptionMethod FROM Win32_EncryptableVolume", objects.items(), &why);
     for (auto& v : s.volumes) {
         if (v.driveType != L"Fixed") continue;
         // Match the volume GUID so folder mount points resolve to their own volume.
@@ -305,10 +299,6 @@ static void CollectBitLocker(StorageInfo& s) {
             v.bitLockerNote = why;
             continue;
         }
-        // SELECT *: the previous query named ProtectionMethod and PercentageEncrypted,
-        // which are not properties of Win32_EncryptableVolume (they are method outputs).
-        // WMI rejects the whole query when a named property doesn't exist, so every
-        // volume came back "Unknown".
         v.bitLockerStatus = Status::Unavailable;
         v.bitLockerNote = L"no Win32_EncryptableVolume instance";
         for (auto* o : objects.items()) {
@@ -335,9 +325,6 @@ static void CollectBitLocker(StorageInfo& s) {
             }
             if (haveEm) v.encryptionMethod = EncryptionMethodName(em);
             else if (havePs && ps == 1) v.encryptionMethod = L"Unknown";
-            unsigned long long percentage = 0;
-            if (CallUIntMethod(wmi.services(), o, L"GetConversionStatus", L"EncryptionPercentage", percentage))
-                v.encryptionPercentage = std::to_wstring(percentage);
             break;
         }
     }

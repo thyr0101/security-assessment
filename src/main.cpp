@@ -141,7 +141,9 @@ int wmain(int argc, wchar_t** argv) {
                               r.windowsUpdate.pendingReason = L"Windows Update collection failed."; }
         },
         [&] {
-            try { r.defender = Timed(L"defender", [&] { return CollectDefenderInfo(); }); }
+            try { r.antivirus = Timed(L"antivirus", [&] { return CollectAntivirusInfo(); }); }
+            catch (...) { r.antivirus.status = Status::Error; }
+            try { r.defender = Timed(L"defender", [&] { return CollectDefenderInfo(HasThirdPartyAntivirus(r.antivirus)); }); }
             catch (...) { r.defender.status = Status::Error; }
         },
         [&] {
@@ -161,10 +163,6 @@ int wmain(int argc, wchar_t** argv) {
             catch (...) { r.security.tpm.status = Status::Error; }
         },
         [&] {
-            try { r.antivirus = Timed(L"antivirus", [&] { return CollectAntivirusInfo(); }); }
-            catch (...) { r.antivirus.status = Status::Error; }
-        },
-        [&] {
             try { r.firewall = Timed(L"firewall", [&] { return CollectFirewallInfo(); }); }
             catch (...) { r.firewall.status = Status::Error; }
         },
@@ -173,16 +171,12 @@ int wmain(int argc, wchar_t** argv) {
             catch (...) { r.storage.status = Status::Error; }
         },
         [&] {
-            try { r.network = Timed(L"network", [&] { return CollectNetworkInfo(json); }); }
+            try { r.network = Timed(L"network", [&] { return CollectNetworkInfo(); }); }
             catch (...) { r.network.status = Status::Error; }
         },
         [&] {
             try { r.hardening = Timed(L"hardening", [&] { return CollectHardeningInfo(); }); }
             catch (...) {}
-        },
-        [&] {
-            try { r.services = Timed(L"services", [&] { return CollectSecurityServices(); }); }
-            catch (...) { r.services.status = Status::Error; }
         },
         [&] {
             try { r.registryFindings = Timed(L"registryFindings", [&] { return RunRegistryScans(DefaultRegistryScans()); }); }

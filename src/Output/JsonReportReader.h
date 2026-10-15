@@ -138,15 +138,11 @@ private:
 inline void ReadSetting(const Object& object, SecuritySetting& setting) {
     object.Field(L"enabled", setting.enabled);
     object.Field(L"status", setting.status);
-    object.Field(L"source", setting.source);
-    object.Field(L"reason", setting.reason);
 }
 inline void ReadService(const Object& object, ServiceEntry& service) {
     object.Field(L"name", service.name);
     object.Field(L"displayName", service.displayName);
     object.Field(L"state", service.state);
-    object.Field(L"startType", service.startType);
-    object.Field(L"status", service.status);
 }
 inline void ReadRule(const Object& object, ScoreRuleResult& rule) {
     object.Field(L"id", rule.id);
@@ -154,7 +150,6 @@ inline void ReadRule(const Object& object, ScoreRuleResult& rule) {
     object.Field(L"maxPoints", rule.maxPoints);
     object.Field(L"awardedPoints", rule.awardedPoints);
     object.Field(L"category", rule.category);
-    object.Field(L"reason", rule.reason);
     object.Field(L"state", rule.state);
 }
 
@@ -174,72 +169,45 @@ inline AssessmentResult ReadReport(const Object& root) {
         object.Field(L"timeZone", result.os.timeZone);
         object.Field(L"locale", result.os.locale);
         object.Field(L"uptimeSeconds", result.os.uptimeSeconds);
-        object.Field(L"status", result.os.status);
     }
     {
         const auto object = root.Child(L"hardware").Child(L"cpu");
-        object.Field(L"vendor", result.cpu.vendor);
         object.Field(L"brand", result.cpu.brand);
         object.Field(L"logicalProcessors", result.cpu.logicalProcessors);
         object.Field(L"physicalCores", result.cpu.physicalCores);
-        object.Field(L"processorGroups", result.cpu.processorGroups);
-        object.Field(L"maxMhz", result.cpu.maxMhz);
         object.Field(L"status", result.cpu.status);
     }
     {
         const auto object = root.Child(L"hardware").Child(L"cpu").Child(L"features");
-        object.Field(L"sse", result.cpu.sse);
-        object.Field(L"sse2", result.cpu.sse2);
-        object.Field(L"sse3", result.cpu.sse3);
-        object.Field(L"ssse3", result.cpu.ssse3);
-        object.Field(L"sse41", result.cpu.sse41);
-        object.Field(L"sse42", result.cpu.sse42);
-        object.Field(L"avx", result.cpu.avx);
-        object.Field(L"avx2", result.cpu.avx2);
-        object.Field(L"avx512f", result.cpu.avx512f);
         object.Field(L"aesni", result.cpu.aesni);
-        object.Field(L"sha", result.cpu.sha);
-        object.Field(L"vmx", result.cpu.vmx);
-        object.Field(L"svm", result.cpu.svm);
         object.Field(L"nx", result.cpu.nx);
-        object.Field(L"hypervisorPresent", result.cpu.hypervisorPresent);
+        object.Field(L"virtualizationAvailable", result.cpu.virtualizationAvailable);
     }
+    // Original compact backups exposed three separate CPUID facts.
+    bool vmx = false, svm = false, hypervisor = false;
+    const auto features = root.Child(L"hardware").Child(L"cpu").Child(L"features");
+    features.Field(L"vmx", vmx); features.Field(L"svm", svm); features.Field(L"hypervisorPresent", hypervisor);
+    result.cpu.virtualizationAvailable |= vmx || svm || hypervisor;
     {
         const auto object = root.Child(L"hardware").Child(L"memory");
         object.Field(L"totalBytes", result.memory.totalBytes);
         object.Field(L"availableBytes", result.memory.availableBytes);
-        object.Field(L"loadPercent", result.memory.loadPercent);
-        object.Field(L"status", result.memory.status);
     }
-    root.Child(L"hardware").Child(L"memory").Items(L"modules", result.memory.modules, [](const Object& object, auto& item) {
-        object.Field(L"capacity", item.capacity);
-        object.Field(L"speed", item.speed);
-        object.Field(L"configuredSpeed", item.configuredSpeed);
-        object.Field(L"manufacturer", item.manufacturer);
-        object.Field(L"partNumber", item.partNumber);
-        object.Field(L"ecc", item.ecc);
-    });
     {
         const auto object = root.Child(L"security");
-        object.Field(L"smartAppControl", result.security.smartAppControlState);
-        object.Field(L"smartAppControlEvaluation", result.security.smartAppControlEvaluation);
         object.Field(L"elevated", result.security.isElevated);
     }
     {
         const auto object = root.Child(L"security").Child(L"tpm");
         object.Field(L"present", result.security.tpm.present);
-        object.Field(L"enabled", result.security.tpm.enabled);
         object.Field(L"ready", result.security.tpm.ready);
         object.Field(L"readinessKnown", result.security.tpm.readinessKnown);
         object.Field(L"specVersion", result.security.tpm.specVersion);
-        object.Field(L"manufacturerId", result.security.tpm.manufacturerId);
         object.Field(L"status", result.security.tpm.status);
     }
     {
         const auto object = root.Child(L"security").Child(L"secureBoot");
-        object.Field(L"firmwareIsUefi", result.security.secureBoot.firmwareIsUefi);
         object.Field(L"enabled", result.security.secureBoot.enabled);
-        object.Field(L"status", result.security.secureBoot.status);
     }
     {
         const auto object = root.Child(L"security").Child(L"virtualization");
@@ -253,11 +221,11 @@ inline AssessmentResult ReadReport(const Object& root) {
     {
         const auto object = root.Child(L"security").Child(L"uac");
         object.Field(L"enabled", result.security.uac.enabled);
+        object.Field(L"promptOnSecureDesktop", result.security.uac.promptOnSecureDesktop);
         object.Field(L"status", result.security.uac.status);
     }
     {
         const auto object = root.Child(L"defender");
-        object.Field(L"installed", result.defender.installed);
         object.Field(L"enabled", result.defender.enabled);
         object.Field(L"enabledStatus", result.defender.enabledStatus);
         object.Field(L"realTimeProtection", result.defender.realTimeProtection);
@@ -268,8 +236,6 @@ inline AssessmentResult ReadReport(const Object& root) {
         object.Field(L"ioavStatus", result.defender.ioavStatus);
         object.Field(L"cloudProtection", result.defender.cloudProtection);
         object.Field(L"cloudProtectionStatus", result.defender.cloudProtectionStatus);
-        object.Field(L"threatsKnown", result.defender.threatsKnown);
-        object.Field(L"threatsCount", result.defender.threatsCount);
         object.Field(L"tamperProtection", result.defender.tamperProtection);
         object.Field(L"tamperProtectionStatus", result.defender.tamperProtectionStatus);
         object.Field(L"amEngineVersion", result.defender.amEngineVersion);
@@ -286,7 +252,6 @@ inline AssessmentResult ReadReport(const Object& root) {
     }
     root.Child(L"antivirus").Items(L"products", result.antivirus.products, [](const Object& object, auto& item) {
         object.Field(L"name", item.name);
-        object.Field(L"id", item.id);
         object.Field(L"state", item.state);
         object.Field(L"status", item.status);
         object.Field(L"isDefender", item.isDefender);
@@ -294,7 +259,6 @@ inline AssessmentResult ReadReport(const Object& root) {
     });
     {
         const auto object = root.Child(L"firewall");
-        object.Field(L"status", result.firewall.status);
         object.Field(L"serviceRunning", result.firewall.serviceRunning);
         object.Field(L"serviceStatus", result.firewall.serviceStatus);
         object.Field(L"activeProfiles", result.firewall.activeProfiles);
@@ -318,10 +282,8 @@ inline AssessmentResult ReadReport(const Object& root) {
         object.Field(L"sizeBytes", item.sizeBytes);
         object.Field(L"busType", item.busType);
         object.Field(L"mediaType", item.mediaType);
-        object.Field(L"isNvme", item.isNvme);
     });
     root.Child(L"storage").Items(L"volumes", result.storage.volumes, [](const Object& object, auto& item) {
-        object.Field(L"volumeId", item.volumeId);
         object.Field(L"diskMappingStatus", item.diskMappingStatus);
         object.Field(L"diskIndices", item.diskIndices);
         object.Field(L"mountPoint", item.mountPoint);
@@ -329,35 +291,19 @@ inline AssessmentResult ReadReport(const Object& root) {
         object.Field(L"filesystem", item.filesystem);
         object.Field(L"totalBytes", item.totalBytes);
         object.Field(L"freeBytes", item.freeBytes);
-        object.Field(L"driveType", item.driveType);
         object.Field(L"bitLockerState", item.bitLockerState);
-        object.Field(L"bitLockerStatus", item.bitLockerStatus);
         object.Field(L"bitLockerNote", item.bitLockerNote);
         object.Field(L"encryptionMethod", item.encryptionMethod);
-        object.Field(L"protectionMethod", item.protectionMethod);
-        object.Field(L"encryptionPercentage", item.encryptionPercentage);
     });
     {
         const auto object = root.Child(L"windowsUpdate");
-        object.Field(L"status", result.windowsUpdate.status);
         object.Field(L"pendingStatus", result.windowsUpdate.pendingStatus);
         object.Field(L"pendingReason", result.windowsUpdate.pendingReason);
-        object.Field(L"pendingCount", result.windowsUpdate.pendingCount);
-        object.Field(L"optionalCount", result.windowsUpdate.optionalCount);
-        object.Field(L"lastSearchUtc", result.windowsUpdate.lastSearchUtc);
-        object.Field(L"rebootRequired", result.windowsUpdate.rebootRequired);
-        object.Field(L"historyStatus", result.windowsUpdate.historyStatus);
-        object.Field(L"lastInstallationUtc", result.windowsUpdate.lastInstallationUtc);
-        object.Field(L"lastInstallationTitle", result.windowsUpdate.lastInstallationTitle);
-        object.Field(L"lastInstallationResult", result.windowsUpdate.lastInstallationResult);
         object.Field(L"lastInstallationError", result.windowsUpdate.lastInstallationError);
-        object.Field(L"lastInstallationSucceeded", result.windowsUpdate.lastInstallationSucceeded);
-        object.Field(L"servicesStatus", result.windowsUpdate.services.status);
     }
     root.Child(L"windowsUpdate").Items(L"services", result.windowsUpdate.services.entries, ReadService);
     root.Child(L"windowsUpdate").Items(L"updates", result.windowsUpdate.updates, [](const Object& object, auto& item) {
         object.Field(L"title", item.title);
-        object.Field(L"id", item.id);
         object.Field(L"optional", item.optional);
         object.Field(L"downloaded", item.downloaded);
         object.Field(L"updateType", item.updateType);
@@ -365,46 +311,6 @@ inline AssessmentResult ReadReport(const Object& root) {
         object.Field(L"classifications", item.classifications);
         object.Field(L"products", item.products);
         object.Field(L"kbArticles", item.kbArticles);
-    });
-    {
-        const auto object = root.Child(L"network");
-        object.Field(L"status", result.network.status);
-        object.Field(L"tcp4Status", result.network.tcp4Status);
-        object.Field(L"tcp6Status", result.network.tcp6Status);
-        object.Field(L"udp4Status", result.network.udp4Status);
-        object.Field(L"udp6Status", result.network.udp6Status);
-    }
-    {
-        const auto object = root.Child(L"network").Child(L"security");
-        object.Field(L"rdpPort", result.network.rdpPort);
-        object.Field(L"rdpPortStatus", result.network.rdpPortStatus);
-    }
-    root.Child(L"network").Items(L"adapters", result.network.adapters, [](const Object& object, auto& item) {
-        object.Field(L"name", item.name);
-        object.Field(L"description", item.description);
-        object.Field(L"mac", item.macAddress);
-        object.Field(L"up", item.up);
-        object.Field(L"ifType", item.ifType);
-        object.Field(L"guid", item.guid);
-        object.Field(L"dhcpServer", item.dhcpServer);
-        object.Field(L"netbiosOptions", item.netbiosOptions);
-        object.Field(L"netbiosStatus", item.netbiosStatus);
-        object.Field(L"dhcp", item.dhcp);
-        object.Field(L"ipv4", item.ipv4);
-        object.Field(L"ipv6", item.ipv6);
-        object.Field(L"gateways", item.gateways);
-        object.Field(L"dns", item.dns);
-    });
-    root.Child(L"network").Items(L"endpoints", result.network.endpoints, [](const Object& object, auto& item) {
-        object.Field(L"protocol", item.protocol);
-        object.Field(L"family", item.family);
-        object.Field(L"address", item.address);
-        object.Field(L"port", item.port);
-        object.Field(L"processId", item.processId);
-        object.Field(L"processName", item.processName);
-        object.Field(L"processStatus", item.processStatus);
-        object.Field(L"binding", item.binding);
-        object.Field(L"reviewNote", item.reviewNote);
     });
     ReadSetting(root.Child(L"network").Child(L"security").Child(L"smb1Server"), result.network.smb1Server);
     ReadSetting(root.Child(L"network").Child(L"security").Child(L"smb1Client"), result.network.smb1Client);
@@ -432,13 +338,10 @@ inline AssessmentResult ReadReport(const Object& root) {
         object.Field(L"lockoutWindow", result.hardening.lockoutWindow);
         object.Field(L"lockoutStatus", result.hardening.lockoutStatus);
     }
-    root.Field(L"servicesStatus", result.services.status);
-    root.Items(L"services", result.services.entries, ReadService);
     root.Items(L"registryFindings", result.registryFindings, [](const Object& object, auto& item) {
         object.Field(L"name", item.name);
         object.Field(L"path", item.path);
         object.Field(L"valueCount", item.valueCount);
-        object.Field(L"subkeyCount", item.subkeyCount);
         object.Field(L"threshold", item.threshold);
         object.Field(L"exceeded", item.exceeded);
         object.Field(L"status", item.status);
@@ -447,16 +350,9 @@ inline AssessmentResult ReadReport(const Object& root) {
         object.Field(L"name", item.name);
         object.Field(L"path", item.path);
         object.Field(L"fileCount", item.fileCount);
-        object.Field(L"dirCount", item.dirCount);
         object.Field(L"threshold", item.threshold);
         object.Field(L"exceeded", item.exceeded);
         object.Field(L"status", item.status);
-    });
-    root.Field(L"persistenceStatus", result.persistence.status);
-    root.Items(L"persistence", result.persistence.entries, [](const Object& object, auto& item) {
-        object.Field(L"location", item.location);
-        object.Field(L"name", item.name);
-        object.Field(L"command", item.command);
     });
     {
         const auto object = root.Child(L"score");
@@ -466,12 +362,8 @@ inline AssessmentResult ReadReport(const Object& root) {
     }
     root.Child(L"score").Items(L"rules", result.score.rules, ReadRule);
     root.Child(L"score").Items(L"antivirusScores", result.score.antivirusScores, [](const Object& object, auto& item) {
-        object.Field(L"id", item.id);
-        object.Field(L"name", item.description);
-        object.Field(L"state", item.state);
         object.Field(L"maxPoints", item.maxPoints);
         object.Field(L"awardedPoints", item.awardedPoints);
-        object.Field(L"reason", item.reason);
     });
     return result;
 }

@@ -96,23 +96,8 @@ namespace sa {
     std::wstring FormatBytes(unsigned long long bytes);
     std::wstring FormatWinError(DWORD err);
     std::wstring Trim(const std::wstring& s);
-    std::vector<std::wstring> Split(const std::wstring& s, wchar_t delim);
     bool IEquals(const std::wstring& a, const std::wstring& b);
     std::wstring ToLower(const std::wstring& s);
-
-    // ---------- Filesystem / version helpers ----------
-    struct FileVersionInfo {
-        std::wstring fileVersion;
-        std::wstring productVersion;
-        std::wstring companyName;
-        std::wstring productName;
-        std::wstring fileDescription;
-        std::wstring originalFilename;
-        std::wstring architecture;
-    };
-    std::optional<FileVersionInfo> QueryFileVersion(const std::wstring& path);
-
-    std::optional<std::wstring> FileSha256(const std::wstring& path);
 
     bool IsElevated();
 

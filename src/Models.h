@@ -8,42 +8,16 @@
 namespace sa {
 
 struct OsInfo {
-    std::wstring productName;      // e.g. "Windows 11 Pro"
-    std::wstring displayVersion;   // e.g. "24H2"
-    std::wstring buildLab;         // e.g. "26100.1.amd64fre..."
-    DWORD major = 0, minor = 0, build = 0, ubr = 0;
-    std::wstring architecture;
-    std::wstring systemRoot;
-    std::wstring systemDirectory;
-    std::wstring computerName;
-    std::wstring userName;
-    std::wstring domainOrWorkgroup;
-    std::wstring installDate;
-    FILETIME bootTime{};
+    std::wstring productName, displayVersion, architecture, computerName, userName, timeZone, locale;
+    DWORD build = 0, ubr = 0;
     unsigned long long uptimeSeconds = 0;
-    std::wstring timeZone;
-    std::wstring locale;
-    std::wstring systemLanguage;
     Status status = Status::Error;
 };
 
 struct CpuInfo {
-    std::wstring vendor;
     std::wstring brand;
-    unsigned logicalProcessors = 0;
-    unsigned physicalCores = 0;
-    unsigned processorGroups = 0;
-    unsigned maxMhz = 0;
-    unsigned currentMhz = 0;
-    unsigned l2CacheKB = 0;
-    unsigned l3CacheKB = 0;
-    bool nx = false;
-    bool sse = false, sse2 = false, sse3 = false, ssse3 = false;
-    bool sse41 = false, sse42 = false;
-    bool avx = false, avx2 = false, avx512f = false;
-    bool aesni = false, sha = false;
-    bool vmx = false, svm = false;
-    bool hypervisorPresent = false;
+    unsigned logicalProcessors = 0, physicalCores = 0;
+    bool nx = false, aesni = false, virtualizationAvailable = false;
     Status status = Status::Error;
 };
 
@@ -51,68 +25,33 @@ struct CpuInfo {
 // With VBS/Hyper-V active, Windows itself runs on top of the hypervisor and the
 // VMX/SVM bits are masked from CPUID, so the raw bits alone under-report.
 inline bool CpuVirtualizationAvailable(const CpuInfo& c) {
-    return c.vmx || c.svm || c.hypervisorPresent;
+    return c.virtualizationAvailable;
 }
 
-struct MemoryModule {
-    unsigned long long capacity = 0;
-    unsigned speed = 0;
-    unsigned configuredSpeed = 0;
-    std::wstring manufacturer;
-    std::wstring partNumber;
-    std::wstring serialNumber;
-    unsigned memoryType = 0;
-    unsigned formFactor = 0;
-    bool ecc = false;
-};
-
 struct MemoryInfo {
-    unsigned long long totalBytes = 0;
-    unsigned long long availableBytes = 0;
-    unsigned loadPercent = 0;
-    unsigned long long totalPageFile = 0;
-    std::vector<MemoryModule> modules;
+    unsigned long long totalBytes = 0, availableBytes = 0;
     Status status = Status::Error;
 };
 
 struct TpmInfo {
-    bool present = false;
-    bool enabled = false;
-    bool activated = false;
-    bool owned = false;
-    bool ready = false;
-    bool readinessKnown = false;
+    bool present = false, ready = false, readinessKnown = false;
     std::wstring specVersion;
-    std::wstring manufacturerId;
-    std::wstring manufacturerVersion;
     Status status = Status::Error;
 };
 
 struct SecureBootInfo {
-    Tri firmwareIsUefi = Tri::Unknown;
-    Tri supported = Tri::Unknown;
     Tri enabled = Tri::Unknown;
     Status status = Status::Error;
 };
 
 struct VirtualizationInfo {
-    bool cpuVmxSupported = false;
-    bool firmwareEnabled = false;   // if detectable
-    bool hypervisorRunning = false;
-    bool vbsEnabled = false;
-    bool hvciEnabled = false;
-    Tri hvciConfigured = Tri::Unknown; // Registry fallback is configuration, not proof of running.
-    bool credentialGuardRunning = false;
-    bool runningServicesKnown = false;
-    bool deviceGuardAvailable = false;
-    bool sandboxAvailable = false;
+    bool vbsEnabled = false, hvciEnabled = false, credentialGuardRunning = false, runningServicesKnown = false;
+    Tri hvciConfigured = Tri::Unknown;
     Status status = Status::Error;
 };
 
 struct UacInfo {
-    bool enabled = false;
-    bool consentPromptAdmin = false;
-    DWORD consentPromptBehaviorAdmin = 0;
+    bool enabled = false, consentPromptAdmin = false;
     DWORD promptOnSecureDesktop = 0;
     Status status = Status::Error;
 };
@@ -132,7 +71,6 @@ struct SecurityInfo {
     bool smartAppControlOn = false;
     Tri smartAppControlState = Tri::Unknown;
     bool smartAppControlEvaluation = false;
-    bool windowsHelloAvailable = false;
     bool isElevated = false;
 };
 
@@ -142,12 +80,8 @@ struct DefenderInfo {
     bool realTimeProtection = false;
     bool behaviorMonitor = false;
     bool ioav = false;
-    bool onAccessProtection = false;
     bool cloudProtection = false;
-    bool sampleSubmission = false;
     bool tamperProtection = false;
-    bool antispywareEnabled = false;
-    bool antivirusEnabled = false;
     // Individual property reads can fail while the status query itself succeeds.
     Status enabledStatus = Status::Unavailable;
     Status realTimeProtectionStatus = Status::Unavailable;
@@ -156,13 +90,7 @@ struct DefenderInfo {
     Status cloudProtectionStatus = Status::Unavailable;
     Status tamperProtectionStatus = Status::Unavailable;
     std::wstring amEngineVersion;
-    std::wstring amProductVersion;
-    std::wstring amServiceVersion;
     std::wstring antivirusSignatureVersion;
-    std::wstring antivirusSignatureLastUpdated;
-    std::wstring lastQuickScan;
-    std::wstring lastFullScan;
-    std::wstring quickScanAge;
     std::wstring amRunningMode;
     Tri periodicScanning = Tri::Unknown; // Informational only; never used for scoring.
     unsigned threatsCount = 0;      // active threats; only meaningful if threatsKnown
@@ -209,7 +137,6 @@ struct FirewallProfile {
     bool enabled = false;
     DWORD defaultInbound = 2;   // 0=block,1=allow,2=unknown/notconfigured
     DWORD defaultOutbound = 2;
-    bool notificationsEnabled = false;
     Status status = Status::Error;
 };
 
@@ -232,8 +159,6 @@ struct StorageVolume {
     std::wstring driveType;       // Fixed/Removable/Network/...
     Status bitLockerStatus = Status::Unavailable;
     std::wstring bitLockerState;  // "On", "Off", "Unknown"
-    std::wstring protectionMethod;
-    std::wstring encryptionPercentage;
     std::wstring encryptionMethod;   // e.g. "XTS-AES 256"; empty if not encrypted/unknown
     std::wstring bitLockerNote;      // why the state is Unknown (diagnostic)
     std::vector<unsigned> diskIndices; // PhysicalDrive numbers returned by volume extents.
@@ -244,12 +169,9 @@ struct StorageDisk {
     unsigned index = 0;
     std::wstring model;
     std::wstring vendor;
-    std::wstring serial;
-    std::wstring firmware;
     unsigned long long sizeBytes = 0;
     std::wstring busType;
     std::wstring mediaType;      // SSD/HDD
-    bool isNvme = false;
 };
 
 struct StorageInfo {
@@ -259,45 +181,17 @@ struct StorageInfo {
 };
 
 struct NetworkAdapterInfo {
-    std::wstring name;
-    std::wstring description;
-    std::wstring guid;
-    std::wstring macAddress;
-    bool up = false;
-    std::wstring ifType;
-    std::vector<std::wstring> ipv4;
-    std::vector<std::wstring> ipv6;
-    std::vector<std::wstring> gateways;
-    std::vector<std::wstring> dns;
-    bool dhcp = false;
-    std::wstring dhcpServer;
-    bool isLoopback = false;
-    bool isVirtual = false;
-    bool isVpn = false;
-    DWORD netbiosOptions = 3; // 0=DHCP controlled, 1=enabled, 2=disabled, 3=unknown.
+    // Only applicable active IPv4 adapters are represented; no identity or addresses.
+    DWORD netbiosOptions = 3;
     Status netbiosStatus = Status::Unavailable;
 };
 
 struct SecuritySetting {
     Tri enabled = Tri::Unknown;
     Status status = Status::Unavailable;
-    std::wstring source;
-    std::wstring reason;
 };
 
 using NetworkSetting = SecuritySetting;
-
-struct NetworkEndpoint {
-    std::wstring protocol; // TCP or UDP
-    std::wstring family;   // IPv4 or IPv6
-    std::wstring address;
-    unsigned port = 0;
-    DWORD processId = 0;
-    std::wstring processName;
-    Status processStatus = Status::Unavailable;
-    std::wstring binding;  // Loopback / All interfaces / Interface
-    std::wstring reviewNote;
-};
 
 struct NetworkInfo {
     std::vector<NetworkAdapterInfo> adapters;
@@ -306,11 +200,6 @@ struct NetworkInfo {
     NetworkSetting smbServerSigning, smbClientSigning, smbGuestLogons;
     NetworkSetting smbEncryption, smbRejectUnencrypted;
     NetworkSetting llmnr, rdp, rdpNla;
-    unsigned rdpPort = 0;
-    Status rdpPortStatus = Status::Unavailable;
-    std::vector<NetworkEndpoint> endpoints; // All TCP listeners, plus UDP port 69.
-    Status tcp4Status = Status::Unavailable, tcp6Status = Status::Unavailable;
-    Status udp4Status = Status::Unavailable, udp6Status = Status::Unavailable;
 };
 
 struct HardeningInfo {
@@ -361,7 +250,6 @@ struct ServiceEntry {
     std::wstring displayName;
     std::wstring state;      // Running/Stopped/Paused/...
     std::wstring startType;  // Boot/System/Auto/Manual/Disabled
-    std::wstring exePath;
     Status status = Status::Error;
 };
 
@@ -372,7 +260,6 @@ struct ServiceReport {
 
 struct WindowsUpdateItem {
     std::wstring title;
-    std::wstring id;
     std::vector<std::wstring> kbArticles;
     std::vector<std::wstring> classifications;
     std::vector<std::wstring> products;
@@ -385,15 +272,9 @@ struct WindowsUpdateItem {
 struct WindowsUpdateInfo {
     // Offline WUA search reads locally cached applicability data only.
     std::vector<WindowsUpdateItem> updates;
-    unsigned pendingCount = 0;
-    unsigned optionalCount = 0;
     Status pendingStatus = Status::Unavailable;
     std::wstring pendingReason;
     Tri rebootRequired = Tri::Unknown;
-    std::wstring lastSearchUtc;
-    std::wstring lastInstallationUtc;
-    std::wstring lastInstallationTitle;
-    std::wstring lastInstallationResult;
     std::wstring lastInstallationError;
     Tri lastInstallationSucceeded = Tri::Unknown;
     Status historyStatus = Status::Unavailable;
@@ -413,7 +294,6 @@ struct RegistryFinding {
     std::wstring name;
     std::wstring path;
     DWORD valueCount = 0;
-    DWORD subkeyCount = 0;
     size_t threshold = 0;
     bool exceeded = false;
     Status status = Status::Error;
@@ -430,20 +310,12 @@ struct DirectoryFinding {
     std::wstring name;
     std::wstring path;
     unsigned long long fileCount = 0;
-    unsigned long long dirCount = 0;
     size_t threshold = 0;
     bool exceeded = false;
     Status status = Status::Error;
 };
 
-struct PersistenceEntry {
-    std::wstring location;   // e.g. "HKCU\\...\\Run"
-    std::wstring name;
-    std::wstring command;
-};
-
 struct PersistenceReport {
-    std::vector<PersistenceEntry> entries;
     Status status = Status::Error;
 };
 
@@ -487,7 +359,6 @@ struct AssessmentResult {
     StorageInfo storage;
     NetworkInfo network;
     HardeningInfo hardening;
-    ServiceReport services;
     WindowsUpdateInfo windowsUpdate;
     std::vector<RegistryFinding> registryFindings;
     std::vector<DirectoryFinding> directoryFindings;

@@ -2,8 +2,6 @@
 #include "../RegistryReader.h"
 #include <windows.h>
 #include <winternl.h>
-#include <ctime>
-#include <chrono>
 
 namespace sa {
 
@@ -18,8 +16,6 @@ namespace sa {
         RTL_OSVERSIONINFOW vi{};
         vi.dwOSVersionInfoSize = sizeof(vi);
         if (fn(&vi) == 0) {
-            o.major = vi.dwMajorVersion;
-            o.minor = vi.dwMinorVersion;
             o.build = vi.dwBuildNumber;
         }
     }
@@ -56,10 +52,6 @@ namespace sa {
             L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"DisplayVersion"))
             o.displayVersion = *dv;
 
-        if (auto bl = RegReadString(HKEY_LOCAL_MACHINE,
-            L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"BuildLabEx"))
-            o.buildLab = *bl;
-
         if (auto v = RegReadDword(HKEY_LOCAL_MACHINE,
             L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"UBR"))
             o.ubr = *v;
@@ -74,19 +66,6 @@ namespace sa {
         default:                           o.architecture = L"Unknown";
         }
 
-        auto directory = [](auto query) {
-            std::vector<wchar_t> buffer(MAX_PATH);
-            for (unsigned attempt = 0; attempt < 4; ++attempt) {
-                const UINT n = query(buffer.data(), static_cast<UINT>(buffer.size()));
-                if (!n) return std::wstring{};
-                if (n < buffer.size()) return std::wstring(buffer.data(), n);
-                buffer.resize(static_cast<size_t>(n) + 1);
-            }
-            return std::wstring{};
-        };
-        o.systemRoot = directory(::GetWindowsDirectoryW);
-        o.systemDirectory = directory(::GetSystemDirectoryW);
-
         DWORD cch = MAX_COMPUTERNAME_LENGTH + 1;
         wchar_t cname[MAX_COMPUTERNAME_LENGTH + 1]{};
         if (::GetComputerNameW(cname, &cch)) o.computerName.assign(cname, cch);
@@ -95,45 +74,14 @@ namespace sa {
         wchar_t uname[256]{};
         if (::GetUserNameW(uname, &cch)) o.userName.assign(uname, cch ? cch - 1 : 0);
 
-        if (auto d = RegReadString(HKEY_LOCAL_MACHINE,
-            L"SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters", L"Domain"))
-            o.domainOrWorkgroup = *d;
-        if (o.domainOrWorkgroup.empty())
-            if (auto w = RegReadString(HKEY_LOCAL_MACHINE,
-                L"SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters", L"NV Domain"))
-                o.domainOrWorkgroup = *w;
-
-        if (auto v = RegReadDword(HKEY_LOCAL_MACHINE,
-            L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"InstallDate")) {
-            time_t t = static_cast<time_t>(*v);
-            struct tm g {}; gmtime_s(&g, &t);
-            wchar_t out[64]{};
-            wcsftime(out, 64, L"%Y-%m-%d", &g);
-            o.installDate = out;
-        }
-
         ULONGLONG ms = ::GetTickCount64();
         o.uptimeSeconds = ms / 1000ULL;
-        FILETIME now{}; ::GetSystemTimeAsFileTime(&now);
-        ULARGE_INTEGER u; u.LowPart = now.dwLowDateTime; u.HighPart = now.dwHighDateTime;
-        u.QuadPart -= ms * 10000ULL;
-        o.bootTime.dwLowDateTime = u.LowPart;
-        o.bootTime.dwHighDateTime = u.HighPart;
-
         DYNAMIC_TIME_ZONE_INFORMATION tz{};
         if (::GetDynamicTimeZoneInformation(&tz) != TIME_ZONE_ID_INVALID)
             o.timeZone = tz.TimeZoneKeyName;
 
         wchar_t loc[LOCALE_NAME_MAX_LENGTH]{};
         if (::GetUserDefaultLocaleName(loc, LOCALE_NAME_MAX_LENGTH)) o.locale = loc;
-
-        {
-            LANGID lid = ::GetSystemDefaultUILanguage();
-            wchar_t name[LOCALE_NAME_MAX_LENGTH]{};
-            if (lid && ::LCIDToLocaleName(MAKELCID(lid, SORT_DEFAULT), name,
-                LOCALE_NAME_MAX_LENGTH, 0))
-                o.systemLanguage = name;
-        }
 
         o.status = o.build ? Status::Success : Status::Unavailable;
         return o;

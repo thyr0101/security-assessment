@@ -31,7 +31,7 @@ All runtime dependencies are Windows components or the C++ runtime. No Python pa
 | `Collectors/StorageCollector` | Physical disks, volume extents, and BitLocker status. |
 | `Collectors/WindowsUpdateCollector` | Offline cached updates, service readiness, restart status, and installation history. |
 | `Collectors/PersistenceCollector` | Startup locations and threshold scans. |
-| `RegistryReader`, `WmiHelper`, `Utilities` | Native resource ownership, typed extraction, hashing, and shared helpers. |
+| `RegistryReader`, `WmiHelper`, `Utilities` | Native resource ownership, typed extraction and shared helpers. |
 | `Security/ScoreEngine` | Applies rules, totals weights, and generates ranked warnings. |
 | `Output/ConsoleRenderer`, `JsonRenderer` | Human-readable presentation and UTF-8 JSON serialization. |
 | `Output/JsonFile` | Safe file creation, native JSON validation, and terminal formatting of saved reports. |
@@ -44,10 +44,10 @@ Four COM-initialized workers run independent collectors and write distinct resul
 - Defender, Device Guard, SMB configuration, and elevated TPM/BitLocker use COM/WMI. SMB uses the provider's read-only `GetConfiguration` methods.
 - Non-admin TPM presence/version use TPM Base Services (`Tbsi_GetDeviceInfo`). Readiness remains explicitly unverified. Non-admin BitLocker checks retain AccessDenied without waiting on its restricted namespace.
 - Windows Security Center provides antivirus registrations. Every product receives an independent 180-point score when Windows confirms it enabled; the overall category remains capped at 180. Defender periodic scanning is informational.
-- IP Helper supplies adapter/endpoint data. The console omits adapter and listener inventory; JSON preserves it. DHCP-controlled NetBIOS does not establish that it is disabled.
+- IP Helper selects only Up, non-loopback IPv4 adapters for the scored NetBIOS check. Temporary adapter IDs match WMI policy readings; addresses, adapter inventory and TCP/UDP endpoints are not stored or exported. No endpoint tables or process names are enumerated. DHCP-controlled NetBIOS does not establish that it is disabled.
 - `GetProcessInformation(ProcessProtectionLevelInfo)` reads actual LSASS protection. Native local SAM APIs read lockout and identify Guest by RID 501, including renamed accounts. Domain and Microsoft accounts can have different policies.
 - `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` maps mounted volumes to physical disks. Spanned volumes appear under every referenced disk with a span note; unmapped volumes remain visible.
-- Windows Update Agent searches offline with service self-upgrade disabled and a 45-second completion timeout. Search failures are not interpreted as no pending updates. Startup types, search timestamps, and installation metadata are retained in JSON where collected.
+- Windows Update Agent searches offline with service self-upgrade disabled and a 45-second completion timeout. Search failures are not interpreted as no pending updates. Service startup type, restart state and the latest installation result are used only for visible scoring. Hidden timestamps, installation titles and update identifiers are not retained. Update identities are read temporarily to deduplicate pending updates.
 - `Windows.Data.Json` validates viewed files through the Windows Runtime. No external viewer or executable is launched.
 
 Source references: [TPM Base Services](https://learn.microsoft.com/en-us/windows/win32/api/tbs/nf-tbs-tbsi_getdeviceinfo), [SMB configuration](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/smb/getconfiguration-msft-smbserverconfiguration), [process protection levels](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/ns-processthreadsapi-process_protection_level_information), [local account policy](https://learn.microsoft.com/en-us/windows/win32/api/lmaccess/nf-lmaccess-netusermodalsget), and [Windows JSON validation](https://learn.microsoft.com/en-us/uwp/api/windows.data.json.jsonobject.tryparse).
@@ -63,7 +63,7 @@ Source references: [TPM Base Services](https://learn.microsoft.com/en-us/windows
 | Network Security | 200 | Firewall coverage 60, inbound defaults 20, firewall service 20; eight SMB/name-resolution/RDP checks at 10 each; modern sign-in policy 20. |
 | Encryption | 90 | BitLocker 50; TPM availability 40. |
 | Account Security | 120 | Admin permission prompt 20; secure desktop 25; Guest disabled 30; Remote Assistance invitations blocked 20; account lockout 25. |
-| Inventory | 0 | Selected software/startup scans and hardware capabilities are informational. |
+| Inventory | 0 | Startup-location readability and threshold findings are informational. |
 | **Total** | **1000** | |
 
 Removing the 20-point password-length rule reallocates five points each to secure desktop, Guest, Remote Assistance, and account lockout. Lockout with shorter-than-15-minute lock/reset windows receives 12 of 25 points; full credit requires 1-10 attempts with both windows at least 15 minutes. These are selected hardening thresholds, not compliance certification.
@@ -88,7 +88,11 @@ SecurityAssessment --json view <report-file>
 - `--no-hash` remains accepted as a legacy no-op for assessment scripts and cannot be combined with view mode. Application collection and executable hashing no longer run. Unexpected arguments and duplicate `--json` are rejected before collecting data.
 - Exit codes: 0 for success/help, 1 for file/runtime output errors, 2 for invalid arguments. The score does not control the exit code.
 
-JSON retains the `system`, `hardware`, `security`, `defender`, `antivirus`, `firewall`, `storage`, `network`, `hardening`, `services`, `registryFindings`, `directoryFindings`, `persistence`, `windowsUpdate`, and `score` report data. Native boolean readings must be interpreted with their accompanying status fields. Warnings are omitted from exports and disabled in the backup viewer. The viewer explicitly displays “Warnings are disabled when viewing an export”. Both current numbered-field and previous compact exports are supported by the viewer; descriptive and legacy plain-text JSON is intentionally rejected. See [JSON_FORMAT.md](JSON_FORMAT.md) for the encoding contract.
+Both JSON formats save a presentation snapshot: fields needed by the console and recorded rule states/points. They exclude adapter/address/listener inventory, setting provenance strings, startup commands, general service inventory, unused hardware details, hidden update metadata and raw scoring evidence already represented by rule rows. Only exceeded thresholds and scan errors are exported. Native readings retain the statuses needed to reproduce the display. UAC secure-desktop and combined CPU virtualization availability are saved explicitly.
+
+Collectors obtain only displayed facts and evidence required by visible scored checks. RAM-module, CPU cache/clock, Windows Hello, startup-command and general service collection have been removed. Startup coverage verifies location readability without enumerating commands. Defender projects only supported properties required by the selected protection display; registered third-party antivirus mode skips Defender preference/threat queries. BitLocker, TPM and Device Guard queries also request only used properties.
+
+Warnings are omitted and disabled in the backup viewer. Existing version 1 and 2 compact backups remain readable; hidden legacy fields are ignored during restoration. Descriptive JSON is intentionally rejected. See [JSON_FORMAT.md](JSON_FORMAT.md) for the encoding contract.
 
 ## Console and warnings
 
@@ -107,7 +111,9 @@ python tests/smoke.py build-tests/Release
 
 Native fixtures use private temporary files and registry data. They cover parsing, ownership, rule boundaries, partial readings, score sums, antivirus fallback, hidden console fields, and JSON save/view behavior. Smoke checks cover file export, automatic filenames, compact viewer round trips, numeric states, readable-file rejection, interactive choices, no-overwrite behavior, invalid arguments, legacy CLI compatibility, removed application inventory, help, and redirected console output.
 
-Optional MSVC `/analyze` and AddressSanitizer builds can check static and memory errors. The previous review passed Debug/Release regressions, live non-admin smoke runs, static analysis, and AddressSanitizer; elevated TPM/BitLocker provider collection was not run live. Synthetic tests cover how those provider results affect scoring.
+Optional MSVC `/analyze` and AddressSanitizer builds can check static and memory errors. The collection cleanup passed Debug/Release regressions, live non-admin smoke runs, static analysis, and AddressSanitizer; elevated TPM/BitLocker provider collection was not run live. Synthetic tests cover how those provider results affect scoring.
+
+In one same-machine comparison, compact exports decreased from 20,063 to 7,188 bytes (64.2%). Every scored rule state, award and weight matched the prior build (772/1000). Export sizes depend on pending updates and visible findings. Warm non-admin smoke exports took about 0.6–0.7 seconds; these individual runs are not a benchmark.
 
 Set `SA_TRACE_TIMINGS=1` to emit per-collector durations to stderr. Prior measured non-admin runs dropped from a 10.994-second profiled baseline to a median of 0.802 seconds over five warm Release JSON runs after avoiding restricted WMI waits and overlapping collectors. Different machines/provider cache states will differ. C++23 typed errors (`std::expected`), owned output pointers (`std::out_ptr`), ranges, joined workers, and bounded topology traversal support safer collection without third-party dependencies.
 

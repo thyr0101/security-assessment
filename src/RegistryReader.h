@@ -18,23 +18,15 @@ public:
 
     Status GetString(const wchar_t* name, std::wstring& out) const;
     Status GetDword (const wchar_t* name, DWORD& out) const;
-    Status GetQword (const wchar_t* name, unsigned long long& out) const;
-    Status GetBool  (const wchar_t* name, bool& out) const; // DWORD != 0
-    Status GetMultiSz(const wchar_t* name, std::vector<std::wstring>& out) const;
-    Status GetBinary(const wchar_t* name, std::vector<BYTE>& out) const;
 
-    // Enumerate immediate values (name/type). The default value has an empty name.
-    Status EnumValues(std::vector<std::pair<std::wstring, DWORD>>& out) const;
     // Count immediate values.
     Status CountValues(DWORD& out) const;
-    Status CountSubkeys(DWORD& out) const;
 
     HKEY get() const noexcept { return key_.get(); }
     bool valid() const noexcept { return key_.valid(); }
 
 private:
     RegKey key_;
-    std::wstring path_;
 };
 
 // Convenience free functions

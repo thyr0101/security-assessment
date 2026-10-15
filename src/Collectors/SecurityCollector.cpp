@@ -35,9 +35,8 @@ namespace sa {
         }
         WmiObjects objsOwner;
         auto& objs = objsOwner.items();
-        auto st = wmi.Query(L"SELECT SpecVersion,ManufacturerId,ManufacturerVersion,"
-            L"IsEnabled_InitialValue,IsActivated_InitialValue,"
-            L"IsOwned_InitialValue FROM Win32_Tpm", objs);
+        auto st = wmi.Query(L"SELECT SpecVersion,"
+            L"IsEnabled_InitialValue,IsActivated_InitialValue FROM Win32_Tpm", objs);
         if (st != Status::Success || objs.empty()) {
             t.present = false;
             t.status = st == Status::Success ? Status::NotFound : st;
@@ -45,23 +44,13 @@ namespace sa {
         }
         for (auto* o : objs) {
             WmiGetString(o, L"SpecVersion", t.specVersion);
-            unsigned long long manufacturer = 0;
-            if (WmiGetUInt(o, L"ManufacturerId", manufacturer)) {
-                wchar_t id[16]{};
-                swprintf_s(id, L"0x%08X", static_cast<unsigned>(manufacturer));
-                t.manufacturerId = id;
-            }
-            WmiGetString(o, L"ManufacturerVersion", t.manufacturerVersion);
-
-            bool b = false;
-            const bool enabledKnown = WmiGetBool(o, L"IsEnabled_InitialValue", t.enabled);
-            const bool activatedKnown = WmiGetBool(o, L"IsActivated_InitialValue", t.activated);
+            bool enabled = false, activated = false;
+            const bool enabledKnown = WmiGetBool(o, L"IsEnabled_InitialValue", enabled);
+            const bool activatedKnown = WmiGetBool(o, L"IsActivated_InitialValue", activated);
             t.readinessKnown = enabledKnown && activatedKnown;
-            if (WmiGetBool(o, L"IsOwned_InitialValue", b)) t.owned = b;
-
+            t.ready = enabled && activated;
             t.present = true;
         }
-        t.ready = t.present && t.enabled && t.activated;
         t.status = Status::Success;
     }
 
@@ -90,13 +79,8 @@ namespace sa {
 
     static void CollectSecureBoot(SecureBootInfo& s) {
         FIRMWARE_TYPE ft = FirmwareTypeUnknown;
-        if (::GetFirmwareType(&ft)) {
-            s.firmwareIsUefi = (ft == FirmwareTypeUefi) ? Tri::Yes :
-                (ft == FirmwareTypeBios) ? Tri::No : Tri::Unknown;
-        }
-        if (s.firmwareIsUefi == Tri::No) {
-            s.supported = Tri::No; s.enabled = Tri::No;
-            s.status = Status::Success; return;
+        if (::GetFirmwareType(&ft) && ft == FirmwareTypeBios) {
+            s.enabled = Tri::No; s.status = Status::Success; return;
         }
 
         // 1) Preferred source: the state the kernel publishes in the registry. It is
@@ -105,7 +89,6 @@ namespace sa {
                 L"SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State",
                 L"UEFISecureBootEnabled")) {
             s.enabled = (*sb != 0) ? Tri::Yes : Tri::No;
-            if (*sb != 0) s.supported = Tri::Yes;
             s.status = Status::Success;
             return;
         }
@@ -120,14 +103,13 @@ namespace sa {
         DWORD got = ::GetFirmwareEnvironmentVariableExW(L"SecureBoot", SB_GUID,
             buf, sizeof(buf), nullptr);
         if (got == sizeof(BYTE)) {
-            s.supported = Tri::Yes;
             s.enabled = (buf[0] != 0) ? Tri::Yes : Tri::No;
             s.status = Status::Success;
             return;
         }
         DWORD err = ::GetLastError();
         if (err == ERROR_INVALID_FUNCTION) {
-            s.supported = Tri::No; s.enabled = Tri::No; s.status = Status::Success;
+            s.enabled = Tri::No; s.status = Status::Success;
         }
         else if (err == ERROR_ENVVAR_NOT_FOUND) {
             s.status = Status::Unavailable;
@@ -151,11 +133,11 @@ namespace sa {
         if (wmi.Connect(L"ROOT\\Microsoft\\Windows\\DeviceGuard") == Status::Success) {
             WmiObjects objsOwner;
             auto& objs = objsOwner.items();
-            if (wmi.Query(L"SELECT * FROM Win32_DeviceGuard", objs) == Status::Success) {
+            if (wmi.Query(L"SELECT VirtualizationBasedSecurityStatus,SecurityServicesRunning FROM Win32_DeviceGuard", objs) == Status::Success) {
                 for (auto* o : objs) {
                     unsigned long long vbs = 0;
                     if (WmiGetUInt(o, L"VirtualizationBasedSecurityStatus", vbs)) {
-                        v.deviceGuardAvailable = true;
+                        v.status = Status::Success;
                         v.vbsEnabled = (vbs == 2);   // 0 = off, 1 = enabled but not running, 2 = running
                     }
                     // Services actually running: 1 = Credential Guard, 2 = HVCI,
@@ -173,7 +155,6 @@ namespace sa {
                 }
             }
         }
-        if (v.deviceGuardAvailable) v.status = Status::Success;
 
         // Fallback when WMI could not report the running services: use the HVCI
         // *configured* state. (Credential Guard has no reliable registry indicator of
@@ -200,9 +181,10 @@ namespace sa {
             return status == Status::Success;
         };
         if (read(L"EnableLUA", v)) u.enabled = v != 0;
-        read(L"ConsentPromptBehaviorAdmin", u.consentPromptBehaviorAdmin);
+        DWORD behavior = 0;
+        read(L"ConsentPromptBehaviorAdmin", behavior);
         read(L"PromptOnSecureDesktop", u.promptOnSecureDesktop);
-        u.consentPromptAdmin = u.consentPromptBehaviorAdmin >= 1 && u.consentPromptBehaviorAdmin <= 5;
+        u.consentPromptAdmin = behavior >= 1 && behavior <= 5;
     }
 
     // ---------------- DEP / SEHOP ----------------
@@ -261,17 +243,6 @@ namespace sa {
         }
     }
 
-    // ---------------- Windows Hello ----------------
-    static void CollectHello(SecurityInfo& s) {
-        // Presence of the WinBio provider key indicates the Hello stack exists.
-        RegistryReader r;
-        if (r.Open(HKEY_LOCAL_MACHINE,
-            L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WinBio")
-            == Status::Success) {
-            s.windowsHelloAvailable = true;
-        }
-    }
-
     SecurityInfo CollectSecurityInfo() {
         SecurityInfo s;
         // Keep the results of other checks when one provider throws.
@@ -281,7 +252,6 @@ namespace sa {
         try { CollectUac(s.uac); } catch (...) { s.uac.status = Status::Error; }
         try { CollectDep(s.dep); } catch (...) { s.dep.status = Status::Error; }
         try { CollectSac(s); } catch (...) { s.smartAppControlState = Tri::Unknown; }
-        try { CollectHello(s); } catch (...) { s.windowsHelloAvailable = false; }
         s.isElevated = IsElevated();
         return s;
     }

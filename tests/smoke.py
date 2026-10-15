@@ -28,17 +28,19 @@ def export_report(app, *options):
         compact_path = Path(folder) / 'compact.json'
         run(app, '--json', '0', str(compact_path), *options)
         compact = json.loads(compact_path.read_text(encoding='utf-8'))
-        assert compact['v'] == 1 and compact['s'][:4] == ['Disabled', 'Enabled', 'Unknown', 'N/A']
-        assert 'system' not in compact and set(compact) == {'v', 's', 'd'}
+        assert compact['v'] == 2 and set(compact) == {'v', 'd'}
+        assert 'system' not in compact and 's' not in compact
         assert len(compact_path.read_bytes()) < len(path.read_bytes())
-        def numeric_data(value):
+        def direct_data(value):
             if isinstance(value, dict):
-                return all(len(k) <= 2 and numeric_data(v) for k, v in value.items())
+                return all(k.isdecimal() and int(k) > 0 and direct_data(v) for k, v in value.items())
             if isinstance(value, list):
-                return all(numeric_data(v) for v in value)
-            return value is None or type(value) in (int, float)
-        assert numeric_data(compact['d'])
-        assert compact['d']['28']['2f']['0'] in (0, 1, 2, 3)
+                return all(direct_data(v) for v in value)
+            return value is None or type(value) in (str, int, float)
+        assert direct_data(compact['d'])
+        assert compact['d']['7']['1'] == report['system']['productName']
+        assert compact['d']['7']['2'] == report['system']['build']
+        assert compact['d']['81']['88']['3'] in (0, 1, 2, 3)
         viewed, _ = run(app, '--json', 'view', str(compact_path))
         assert viewed.startswith('Windows Security Assessment')
         assert viewed.index('Windows Security Assessment') < viewed.index('[!] BACKUP REPORT') < viewed.index('-- System')
@@ -51,9 +53,8 @@ def export_report(app, *options):
         assert report['system']['computerName'] in viewed
         # Viewing uses saved values even if they differ from this machine.
         modified = json.loads(json.dumps(compact))
-        modified['d']['4']['a'] = len(modified['s'])
-        modified['s'].append('OFFLINE_COMPUTER_SENTINEL')
-        modified['d']['5w']['5x'] = 123
+        modified['d']['7']['11'] = 'OFFLINE_COMPUTER_SENTINEL'
+        modified['d']['213']['214'] = 123
         offline = Path(folder) / 'offline.json'
         offline.write_text(json.dumps(modified), encoding='utf-8')
         restored, _ = run(app, '--json', 'view', str(offline))
@@ -197,6 +198,11 @@ def main():
     with tempfile.TemporaryDirectory(prefix='sa-invalid-compact-') as folder:
         invalid_path = Path(folder) / 'bad.json'
         corruptions = [
+            {'v': 2, 'd': {'0': 0}},
+            {'v': 2, 'd': {'7': {'11': 999}}},
+            {'v': 2, 'd': {'81': {'88': {'3': 9}}}},
+            {'v': 2, 'd': {'7': {'1': True}}},
+
             {'v': 999, 's': [], 'd': {}},
             {'v': 1, 's': ['bad', 'Enabled', 'Unknown', 'N/A'], 'd': {}},
             {'v': 1, 's': ['Disabled', 'Enabled', 'Unknown', 'N/A'], 'd': {'zz': 0}},
@@ -212,7 +218,7 @@ def main():
         assert invalid.returncode == 2 and not invalid.stdout
     assert 'privacy' not in report and 'minimumPasswordLength' not in report['hardening']
     assert all(rule['id'] != 'acc.password' for rule in report['score']['rules'])
-    print(f"Smoke checks passed: compact/readable JSON, prompt, numeric codes, viewer, help, redirected console; elevated={report['security']['elevated']}.")
+    print(f"Smoke checks passed: direct-value compact JSON, readable export, prompt, numeric codes, viewer, help, redirected console; elevated={report['security']['elevated']}.")
     print(f"Elapsed: --no-hash {no_hash_time:.3f}s; default {default_time:.3f}s (single runs, not a benchmark).")
     if args.baseline:
         with tempfile.TemporaryDirectory(prefix='sa-baseline-') as folder:

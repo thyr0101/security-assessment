@@ -559,6 +559,7 @@ static void TestJsonFiles(Fixture& fixture) {
     result.os.productName = L"quoted \"name\" with [braces] and \\slashes";
     result.score = ComputeScore(result);
     result.os.computerName = L"SAVED_COMPUTER";
+    result.os.build = 26100;
     result.cpu.brand = L"SAVED_CPU";
     result.cpu.hypervisorPresent = true;
     result.memory.totalBytes = 32ull << 30;
@@ -573,11 +574,17 @@ static void TestJsonFiles(Fixture& fixture) {
     StorageVolume volume; volume.mountPoint = L"Z:\\"; volume.diskIndices = {3}; volume.bitLockerState = L"On";
     volume.totalBytes = 1ull << 40; volume.freeBytes = 1ull << 39;
     result.storage.volumes.push_back(volume);
+    FirewallProfile profile; profile.name = L"Domain"; profile.status = Status::Success;
+    profile.enabled = true; profile.defaultInbound = 0; profile.defaultOutbound = 1;
+    result.firewall.profiles.push_back(profile);
     result.score.total = 321; // A recorded score must never be recomputed during viewing.
     Check(!result.score.warnings.empty(), "fixture has live warnings to exclude");
     const auto text = RenderJson(result);
     const auto compact = RenderJson(result, JsonFormat::Compact);
-    Check(compact.size() < text.size(), "compact reports reduce repeated keys and text");
+    Check(compact.size() < text.size(), "compact reports reduce field names and omit default values");
+    Check(compact.find("\"s\":") == std::string::npos && compact.find("\"1\":\"quoted") != std::string::npos,
+          "compact fields store literal values without a string table");
+    Check(compact.find("\"2\":26100") != std::string::npos, "build has decimal field ID 2");
     Check(text.find("\"warnings\"") == std::string::npos, "JSON exports omit warnings by default");
     Check(text.find("\"applications\"") == std::string::npos, "JSON exports omit removed applications");
     Check(std::ranges::none_of(result.score.rules, [](const auto& rule) { return rule.id == "hyg.appinv"; }),
@@ -619,6 +626,10 @@ static void TestJsonFiles(Fixture& fixture) {
     Check(!ReadJsonReport(bad), "raw NUL characters cannot hide trailing report data");
     std::ofstream(bad, std::ios::binary) << "\xef\xbb\xbf" << compact;
     Check(ReadJsonReport(bad).has_value(), "UTF-8 BOM reports remain viewable");
+    std::ofstream(bad, std::ios::binary) << R"({"v":1,"s":["Disabled","Enabled","Unknown","N/A","Legacy OS"],"d":{"4":{"5":4,"7":26100},"5w":{"5x":7,"5y":10,"60":[]}}})";
+    const auto previousCompact = ReadJsonReport(bad);
+    Check(previousCompact && previousCompact->os.productName == L"Legacy OS" && previousCompact->os.build == 26100 &&
+          previousCompact->score.total == 7, "previous compact backups remain viewable");
     auto legacy = text;
     legacy.insert(legacy.size() - 2, ",\"warnings\":[{\"title\":\"OLD_WARNING_SENTINEL\"}]");
     std::ofstream(bad, std::ios::binary) << legacy;
@@ -650,7 +661,7 @@ static void TestJsonFiles(Fixture& fixture) {
         coded.firewall.activeProfilesStatus = status;
         coded.network.rdp.status = status;
         coded.os.computerName = L"Enabled";
-        NetworkAdapterInfo adapter; adapter.ipv4 = {L"192.0.2.1", L"192.0.2.2"}; adapter.dns = {L"192.0.2.53"};
+        NetworkAdapterInfo adapter; adapter.netbiosOptions = 0; adapter.ipv4 = {L"192.0.2.1", L"192.0.2.2"}; adapter.dns = {L"192.0.2.53"};
         coded.network.adapters.push_back(adapter);
         for (const auto tri : {Tri::Yes, Tri::No, Tri::Unknown, Tri::NotApplicable}) {
             coded.security.secureBoot.enabled = tri;

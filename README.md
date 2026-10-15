@@ -45,7 +45,7 @@ The prompt explains both formats. For scripts, specify the format directly (no p
 
 | Mode | Contents | Opens in the app viewer |
 | --- | --- | --- |
-| `0` Compact | Short field keys, numeric states and references to shared text. Disabled = 0, enabled = 1, unknown = 2. | Yes |
+| `0` Compact | Numbered field keys with actual values; Boolean states use 0/1. Disabled = 0, enabled = 1, unknown = 2. | Yes |
 | `1` Readable | Descriptive field names and text states for manual inspection or other tools. | No |
 
 Omit the filename to generate one in the current folder. The destination folder must exist, and existing files are never overwritten. The command prints the saved file's path. Compact encoding is **not encryption**; both formats contain system details.

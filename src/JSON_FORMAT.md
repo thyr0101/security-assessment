@@ -1,17 +1,21 @@
-# Compact JSON format, version 1
+# Compact JSON format, version 2
 
 CLI mode `--json 0` writes a compact report. Mode `--json 1` writes the descriptive schema and cannot be opened by the viewer. The choice prompt appears when the mode is omitted. Filenames remain optional.
 
-## Envelope
+## Version 2 layout
+
+New exports use numbered fields with their actual values directly beside them. Text is not stored in a lookup table. The following abbreviated example illustrates the System group (`7`), OS name (`1`), build (`2`) and Defender group (`100`) with enabled (`3`):
 
 ```json
-{"v":1,"s":["Disabled","Enabled","Unknown","N/A","additional text..."],"d":{}}
+{"v":2,"d":{"7":{"1":"Windows 11 Pro","2":26100},"100":{"3":1}}}
 ```
 
-- `v`: exact schema version. Unknown versions are rejected.
-- `s`: shared text table. The first four strings must match the example exactly. Additional strings (names, rule descriptions, reasons, titles, categories and other text) are stored once and referenced by zero-based numeric index.
-- `d`: assessment data. Field keys use the fixed table below. Objects and arrays keep their descriptive-schema structure; measured numbers and nulls remain numbers and nulls.
-- Compact encoding is not encryption or authentication. System details remain recoverable, and a file's score is recorded evidence, not a live assessment.
+- `v`: schema version.
+- `d`: assessment data. Objects and arrays keep the descriptive schema's hierarchy.
+- Decimal field IDs are fixed by the table below. OS name is `1`, and build is `2`.
+- Text values such as OS names, update titles and rule descriptions remain directly in their fields. Measured numbers and nulls remain numbers and nulls.
+- Empty text properties and optional empty arrays are omitted and restored from model defaults. Zero or unavailable numeric properties with zero defaults are also omitted. Required score totals and fields with nonzero defaults remain explicit. All Boolean and state readings, and every array element, are retained.
+- There is no string dictionary or text-reference encoding in version 2.
 
 ## State codes
 
@@ -21,246 +25,254 @@ CLI mode `--json 0` writes a compact report. Mode `--json 1` writes the descript
 | Tri-state | 0=No/disabled; 1=Yes/enabled; 2=Unknown; 3=N/A |
 | Collection status | 0=Error; 1=Success; 2=Unavailable; 3=NotFound; 4=AccessDenied; 5=Unsupported |
 | Antivirus state | 0=Disabled; 1=Enabled; 2=Unknown; 3=Snoozed; 4=Expired |
-| Other text, including rule states | Index into `s`; Disabled=0, Enabled=1 and Unknown=2. Other labels use the report's text table. |
+| Rule/service `state` | Disabled=0; Enabled=1; Unknown=2. Other descriptive states (such as Running, Evaluation or Modern responses only) remain literal text. |
+| BitLocker state | Off=0; On=1; Unknown=2 |
+| Score category | 0=Hardware Security; 1=OS Security; 2=Windows Update; 3=Malware Protection; 4=Network Security; 5=Encryption; 6=Account Security; 7=Hardening; 8=Software Hygiene; 9=Informational |
 
-`enabled` is Boolean for TPM, UAC, Defender and firewall profiles; it is tri-state for Secure Boot and general security settings. Arrays of text contain text-table indexes; numeric arrays such as disk indexes retain their numeric values. Empty text also has a table entry. Native JSON booleans and quoted primitive values are not used in `d`.
+`enabled` is Boolean for TPM, UAC, Defender and firewall profiles; it is tri-state for Secure Boot and general security settings. Text arrays contain actual strings, and numeric arrays such as disk indexes retain actual numbers. Native JSON booleans are not used in `d`.
 
-Warnings and application inventory are not exported. Scores are restored without rescoring. Input is limited to 64 MiB, nesting to 128 levels, expanded JSON to 128 MiB, and the text table to 100,000 entries. Unknown keys, invalid codes and invalid text references are rejected. Terminal control characters are escaped for display after import.
+Warnings and application inventory are not exported. Scores are restored without rescoring. Input is limited to 64 MiB, nesting to 128 levels, expanded JSON to 128 MiB. Unknown keys and invalid state codes are rejected. Terminal control characters are escaped for display after import.
+
+## Previous compact backups
+
+The viewer continues to read version 1 compact backups with base-36 keys and the shared `s` text table, using their original mapping. The old table's 100,000-entry limit remains enforced. New exports always use version 2. Descriptive/plain-text JSON is not viewable.
+
+Compact encoding is not encryption or authentication. System details remain recoverable, and recorded scores are not a live assessment.
 
 ## Fixed key table
 
-Key IDs are base-36 strings. This order is part of version 1: do not reorder it. New keys may only be appended; incompatible changes require a new version. The value-type rules are defined in `JsonCompact.cpp::Type`.
+Key IDs are decimal strings starting at 1. This order is part of version 2: do not reorder it. New keys may only be appended; incompatible changes require a new version. The value-type rules are defined in `JsonCompact.cpp::Type`.
 
 | Key | Descriptive field |
 | --- | --- |
-| `0` | `enabled` |
-| `1` | `status` |
-| `2` | `source` |
-| `3` | `reason` |
-| `4` | `system` |
-| `5` | `productName` |
-| `6` | `displayVersion` |
-| `7` | `build` |
-| `8` | `ubr` |
-| `9` | `architecture` |
-| `a` | `computerName` |
-| `b` | `userName` |
-| `c` | `timeZone` |
-| `d` | `locale` |
-| `e` | `uptimeSeconds` |
-| `f` | `windowsUpdate` |
-| `g` | `cachedOnly` |
-| `h` | `pendingStatus` |
-| `i` | `pendingReason` |
-| `j` | `pendingCount` |
-| `k` | `optionalCount` |
-| `l` | `lastSearchUtc` |
-| `m` | `rebootRequired` |
-| `n` | `historyStatus` |
-| `o` | `lastInstallationUtc` |
-| `p` | `lastInstallationTitle` |
-| `q` | `lastInstallationResult` |
-| `r` | `lastInstallationError` |
-| `s` | `lastInstallationSucceeded` |
-| `t` | `updates` |
-| `u` | `title` |
-| `v` | `id` |
-| `w` | `optional` |
-| `x` | `downloaded` |
-| `y` | `updateType` |
-| `z` | `severity` |
-| `10` | `classifications` |
-| `11` | `products` |
-| `12` | `kbArticles` |
-| `13` | `servicesStatus` |
-| `14` | `services` |
-| `15` | `name` |
-| `16` | `displayName` |
-| `17` | `state` |
-| `18` | `startType` |
-| `19` | `hardware` |
-| `1a` | `cpu` |
-| `1b` | `vendor` |
-| `1c` | `brand` |
-| `1d` | `logicalProcessors` |
-| `1e` | `physicalCores` |
-| `1f` | `processorGroups` |
-| `1g` | `maxMhz` |
-| `1h` | `features` |
-| `1i` | `sse` |
-| `1j` | `sse2` |
-| `1k` | `sse3` |
-| `1l` | `ssse3` |
-| `1m` | `sse41` |
-| `1n` | `sse42` |
-| `1o` | `avx` |
-| `1p` | `avx2` |
-| `1q` | `avx512f` |
-| `1r` | `aesni` |
-| `1s` | `sha` |
-| `1t` | `vmx` |
-| `1u` | `hypervisorPresent` |
-| `1v` | `svm` |
-| `1w` | `nx` |
-| `1x` | `memory` |
-| `1y` | `totalBytes` |
-| `1z` | `availableBytes` |
-| `20` | `loadPercent` |
-| `21` | `modules` |
-| `22` | `capacity` |
-| `23` | `speed` |
-| `24` | `configuredSpeed` |
-| `25` | `manufacturer` |
-| `26` | `partNumber` |
-| `27` | `ecc` |
-| `28` | `security` |
-| `29` | `tpm` |
-| `2a` | `present` |
-| `2b` | `ready` |
-| `2c` | `readinessKnown` |
-| `2d` | `specVersion` |
-| `2e` | `manufacturerId` |
-| `2f` | `secureBoot` |
-| `2g` | `firmwareIsUefi` |
-| `2h` | `virtualization` |
-| `2i` | `vbsEnabled` |
-| `2j` | `hvciEnabled` |
-| `2k` | `credentialGuardRunning` |
-| `2l` | `hvciConfigured` |
-| `2m` | `runningServicesKnown` |
-| `2n` | `uac` |
-| `2o` | `smartAppControl` |
-| `2p` | `smartAppControlEvaluation` |
-| `2q` | `elevated` |
-| `2r` | `defender` |
-| `2s` | `installed` |
-| `2t` | `enabledStatus` |
-| `2u` | `realTimeProtection` |
-| `2v` | `realTimeProtectionStatus` |
-| `2w` | `behaviorMonitor` |
-| `2x` | `behaviorMonitorStatus` |
-| `2y` | `ioav` |
-| `2z` | `ioavStatus` |
-| `30` | `cloudProtection` |
-| `31` | `cloudProtectionStatus` |
-| `32` | `threatsKnown` |
-| `33` | `threatsCount` |
-| `34` | `tamperProtection` |
-| `35` | `tamperProtectionStatus` |
-| `36` | `amEngineVersion` |
-| `37` | `amRunningMode` |
-| `38` | `periodicScanning` |
-| `39` | `antivirusSignatureVersion` |
-| `3a` | `antivirus` |
-| `3b` | `hasThirdParty` |
-| `3c` | `isDefender` |
-| `3d` | `signaturesUpToDate` |
-| `3e` | `firewall` |
-| `3f` | `serviceRunning` |
-| `3g` | `serviceStatus` |
-| `3h` | `activeProfiles` |
-| `3i` | `activeProfilesStatus` |
-| `3j` | `profiles` |
-| `3k` | `defaultInbound` |
-| `3l` | `defaultOutbound` |
-| `3m` | `storage` |
-| `3n` | `disks` |
-| `3o` | `index` |
-| `3p` | `model` |
-| `3q` | `sizeBytes` |
-| `3r` | `busType` |
-| `3s` | `mediaType` |
-| `3t` | `isNvme` |
-| `3u` | `volumes` |
-| `3v` | `volumeId` |
-| `3w` | `diskMappingStatus` |
-| `3x` | `diskIndices` |
-| `3y` | `mountPoint` |
-| `3z` | `volumeLabel` |
-| `40` | `filesystem` |
-| `41` | `freeBytes` |
-| `42` | `driveType` |
-| `43` | `bitLockerState` |
-| `44` | `bitLockerStatus` |
-| `45` | `bitLockerNote` |
-| `46` | `encryptionMethod` |
-| `47` | `protectionMethod` |
-| `48` | `encryptionPercentage` |
-| `49` | `network` |
-| `4a` | `adapters` |
-| `4b` | `description` |
-| `4c` | `mac` |
-| `4d` | `up` |
-| `4e` | `ifType` |
-| `4f` | `guid` |
-| `4g` | `dhcpServer` |
-| `4h` | `netbiosOptions` |
-| `4i` | `netbiosStatus` |
-| `4j` | `dhcp` |
-| `4k` | `ipv4` |
-| `4l` | `ipv6` |
-| `4m` | `gateways` |
-| `4n` | `dns` |
-| `4o` | `rdpPort` |
-| `4p` | `rdpPortStatus` |
-| `4q` | `tcp4Status` |
-| `4r` | `tcp6Status` |
-| `4s` | `udp4Status` |
-| `4t` | `udp6Status` |
-| `4u` | `endpointScope` |
-| `4v` | `endpoints` |
-| `4w` | `protocol` |
-| `4x` | `family` |
-| `4y` | `address` |
-| `4z` | `port` |
-| `50` | `processId` |
-| `51` | `processName` |
-| `52` | `processStatus` |
-| `53` | `binding` |
-| `54` | `reviewNote` |
-| `55` | `hardening` |
-| `56` | `lsaProtection` |
-| `57` | `noLmHash` |
-| `58` | `autoPlayDisabled` |
-| `59` | `guestDisabled` |
-| `5a` | `remoteAssistanceDisabled` |
-| `5b` | `inactivitySeconds` |
-| `5c` | `inactivityStatus` |
-| `5d` | `lmCompatibility` |
-| `5e` | `lmCompatibilityStatus` |
-| `5f` | `lockoutThreshold` |
-| `5g` | `lockoutDuration` |
-| `5h` | `lockoutWindow` |
-| `5i` | `lockoutStatus` |
-| `5j` | `registryFindings` |
-| `5k` | `path` |
-| `5l` | `valueCount` |
-| `5m` | `subkeyCount` |
-| `5n` | `threshold` |
-| `5o` | `exceeded` |
-| `5p` | `directoryFindings` |
-| `5q` | `fileCount` |
-| `5r` | `dirCount` |
-| `5s` | `persistence` |
-| `5t` | `location` |
-| `5u` | `command` |
-| `5v` | `persistenceStatus` |
-| `5w` | `score` |
-| `5x` | `total` |
-| `5y` | `maximum` |
-| `5z` | `registeredAntivirusScoring` |
-| `60` | `rules` |
-| `61` | `maxPoints` |
-| `62` | `awardedPoints` |
-| `63` | `category` |
-| `64` | `antivirusScores` |
-| `65` | `smb1Server` |
-| `66` | `smb1Client` |
-| `67` | `smbServerSigning` |
-| `68` | `smbClientSigning` |
-| `69` | `smbGuestLogons` |
-| `6a` | `smbEncryption` |
-| `6b` | `smbRejectUnencrypted` |
-| `6c` | `llmnr` |
-| `6d` | `rdp` |
-| `6e` | `rdpNla` |
+| `1` | `productName` |
+| `2` | `build` |
+| `3` | `enabled` |
+| `4` | `status` |
+| `5` | `source` |
+| `6` | `reason` |
+| `7` | `system` |
+| `8` | `displayVersion` |
+| `9` | `ubr` |
+| `10` | `architecture` |
+| `11` | `computerName` |
+| `12` | `userName` |
+| `13` | `timeZone` |
+| `14` | `locale` |
+| `15` | `uptimeSeconds` |
+| `16` | `windowsUpdate` |
+| `17` | `cachedOnly` |
+| `18` | `pendingStatus` |
+| `19` | `pendingReason` |
+| `20` | `pendingCount` |
+| `21` | `optionalCount` |
+| `22` | `lastSearchUtc` |
+| `23` | `rebootRequired` |
+| `24` | `historyStatus` |
+| `25` | `lastInstallationUtc` |
+| `26` | `lastInstallationTitle` |
+| `27` | `lastInstallationResult` |
+| `28` | `lastInstallationError` |
+| `29` | `lastInstallationSucceeded` |
+| `30` | `updates` |
+| `31` | `title` |
+| `32` | `id` |
+| `33` | `optional` |
+| `34` | `downloaded` |
+| `35` | `updateType` |
+| `36` | `severity` |
+| `37` | `classifications` |
+| `38` | `products` |
+| `39` | `kbArticles` |
+| `40` | `servicesStatus` |
+| `41` | `services` |
+| `42` | `name` |
+| `43` | `displayName` |
+| `44` | `state` |
+| `45` | `startType` |
+| `46` | `hardware` |
+| `47` | `cpu` |
+| `48` | `vendor` |
+| `49` | `brand` |
+| `50` | `logicalProcessors` |
+| `51` | `physicalCores` |
+| `52` | `processorGroups` |
+| `53` | `maxMhz` |
+| `54` | `features` |
+| `55` | `sse` |
+| `56` | `sse2` |
+| `57` | `sse3` |
+| `58` | `ssse3` |
+| `59` | `sse41` |
+| `60` | `sse42` |
+| `61` | `avx` |
+| `62` | `avx2` |
+| `63` | `avx512f` |
+| `64` | `aesni` |
+| `65` | `sha` |
+| `66` | `vmx` |
+| `67` | `hypervisorPresent` |
+| `68` | `svm` |
+| `69` | `nx` |
+| `70` | `memory` |
+| `71` | `totalBytes` |
+| `72` | `availableBytes` |
+| `73` | `loadPercent` |
+| `74` | `modules` |
+| `75` | `capacity` |
+| `76` | `speed` |
+| `77` | `configuredSpeed` |
+| `78` | `manufacturer` |
+| `79` | `partNumber` |
+| `80` | `ecc` |
+| `81` | `security` |
+| `82` | `tpm` |
+| `83` | `present` |
+| `84` | `ready` |
+| `85` | `readinessKnown` |
+| `86` | `specVersion` |
+| `87` | `manufacturerId` |
+| `88` | `secureBoot` |
+| `89` | `firmwareIsUefi` |
+| `90` | `virtualization` |
+| `91` | `vbsEnabled` |
+| `92` | `hvciEnabled` |
+| `93` | `credentialGuardRunning` |
+| `94` | `hvciConfigured` |
+| `95` | `runningServicesKnown` |
+| `96` | `uac` |
+| `97` | `smartAppControl` |
+| `98` | `smartAppControlEvaluation` |
+| `99` | `elevated` |
+| `100` | `defender` |
+| `101` | `installed` |
+| `102` | `enabledStatus` |
+| `103` | `realTimeProtection` |
+| `104` | `realTimeProtectionStatus` |
+| `105` | `behaviorMonitor` |
+| `106` | `behaviorMonitorStatus` |
+| `107` | `ioav` |
+| `108` | `ioavStatus` |
+| `109` | `cloudProtection` |
+| `110` | `cloudProtectionStatus` |
+| `111` | `threatsKnown` |
+| `112` | `threatsCount` |
+| `113` | `tamperProtection` |
+| `114` | `tamperProtectionStatus` |
+| `115` | `amEngineVersion` |
+| `116` | `amRunningMode` |
+| `117` | `periodicScanning` |
+| `118` | `antivirusSignatureVersion` |
+| `119` | `antivirus` |
+| `120` | `hasThirdParty` |
+| `121` | `isDefender` |
+| `122` | `signaturesUpToDate` |
+| `123` | `firewall` |
+| `124` | `serviceRunning` |
+| `125` | `serviceStatus` |
+| `126` | `activeProfiles` |
+| `127` | `activeProfilesStatus` |
+| `128` | `profiles` |
+| `129` | `defaultInbound` |
+| `130` | `defaultOutbound` |
+| `131` | `storage` |
+| `132` | `disks` |
+| `133` | `index` |
+| `134` | `model` |
+| `135` | `sizeBytes` |
+| `136` | `busType` |
+| `137` | `mediaType` |
+| `138` | `isNvme` |
+| `139` | `volumes` |
+| `140` | `volumeId` |
+| `141` | `diskMappingStatus` |
+| `142` | `diskIndices` |
+| `143` | `mountPoint` |
+| `144` | `volumeLabel` |
+| `145` | `filesystem` |
+| `146` | `freeBytes` |
+| `147` | `driveType` |
+| `148` | `bitLockerState` |
+| `149` | `bitLockerStatus` |
+| `150` | `bitLockerNote` |
+| `151` | `encryptionMethod` |
+| `152` | `protectionMethod` |
+| `153` | `encryptionPercentage` |
+| `154` | `network` |
+| `155` | `adapters` |
+| `156` | `description` |
+| `157` | `mac` |
+| `158` | `up` |
+| `159` | `ifType` |
+| `160` | `guid` |
+| `161` | `dhcpServer` |
+| `162` | `netbiosOptions` |
+| `163` | `netbiosStatus` |
+| `164` | `dhcp` |
+| `165` | `ipv4` |
+| `166` | `ipv6` |
+| `167` | `gateways` |
+| `168` | `dns` |
+| `169` | `rdpPort` |
+| `170` | `rdpPortStatus` |
+| `171` | `tcp4Status` |
+| `172` | `tcp6Status` |
+| `173` | `udp4Status` |
+| `174` | `udp6Status` |
+| `175` | `endpointScope` |
+| `176` | `endpoints` |
+| `177` | `protocol` |
+| `178` | `family` |
+| `179` | `address` |
+| `180` | `port` |
+| `181` | `processId` |
+| `182` | `processName` |
+| `183` | `processStatus` |
+| `184` | `binding` |
+| `185` | `reviewNote` |
+| `186` | `hardening` |
+| `187` | `lsaProtection` |
+| `188` | `noLmHash` |
+| `189` | `autoPlayDisabled` |
+| `190` | `guestDisabled` |
+| `191` | `remoteAssistanceDisabled` |
+| `192` | `inactivitySeconds` |
+| `193` | `inactivityStatus` |
+| `194` | `lmCompatibility` |
+| `195` | `lmCompatibilityStatus` |
+| `196` | `lockoutThreshold` |
+| `197` | `lockoutDuration` |
+| `198` | `lockoutWindow` |
+| `199` | `lockoutStatus` |
+| `200` | `registryFindings` |
+| `201` | `path` |
+| `202` | `valueCount` |
+| `203` | `subkeyCount` |
+| `204` | `threshold` |
+| `205` | `exceeded` |
+| `206` | `directoryFindings` |
+| `207` | `fileCount` |
+| `208` | `dirCount` |
+| `209` | `persistence` |
+| `210` | `location` |
+| `211` | `command` |
+| `212` | `persistenceStatus` |
+| `213` | `score` |
+| `214` | `total` |
+| `215` | `maximum` |
+| `216` | `registeredAntivirusScoring` |
+| `217` | `rules` |
+| `218` | `maxPoints` |
+| `219` | `awardedPoints` |
+| `220` | `category` |
+| `221` | `antivirusScores` |
+| `222` | `smb1Server` |
+| `223` | `smb1Client` |
+| `224` | `smbServerSigning` |
+| `225` | `smbClientSigning` |
+| `226` | `smbGuestLogons` |
+| `227` | `smbEncryption` |
+| `228` | `smbRejectUnencrypted` |
+| `229` | `llmnr` |
+| `230` | `rdp` |
+| `231` | `rdpNla` |

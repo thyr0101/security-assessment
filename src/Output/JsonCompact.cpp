@@ -6,7 +6,6 @@
 #include <array>
 #include <charconv>
 #include <stdexcept>
-#include <unordered_map>
 #include <vector>
 
 namespace sa {
@@ -16,8 +15,8 @@ using Microsoft::WRL::Wrappers::HString;
 using Microsoft::WRL::Wrappers::HStringReference;
 using namespace ABI::Windows::Data::Json;
 constexpr size_t kExpandedLimit = 128u << 20;
-// Version 1 key order is part of the file format. Append only; never reorder.
-constexpr std::string_view keys[] = {
+// Version 1 uses base-36 IDs and a shared text table. Retain its reader.
+constexpr std::string_view legacyKeys[] = {
     "enabled", "status", "source", "reason", "system", "productName", "displayVersion",
     "build", "ubr", "architecture", "computerName", "userName", "timeZone", "locale",
     "uptimeSeconds", "windowsUpdate", "cachedOnly", "pendingStatus", "pendingReason", "pendingCount", "optionalCount",
@@ -52,6 +51,21 @@ constexpr std::string_view keys[] = {
     "maxPoints", "awardedPoints", "category", "antivirusScores", "smb1Server", "smb1Client", "smbServerSigning",
     "smbClientSigning", "smbGuestLogons", "smbEncryption", "smbRejectUnencrypted", "llmnr", "rdp", "rdpNla",
 };
+// Version 2 uses decimal field IDs and literal text values. OS = 1, build = 2.
+// This order is a persisted format contract: append new fields, never reorder.
+constexpr auto keys = [] {
+    std::array<std::string_view, std::size(legacyKeys)> result{};
+    result[0] = "productName";
+    result[1] = "build";
+    size_t index = 2;
+    for (const auto key : legacyKeys)
+        if (key != "productName" && key != "build") result[index++] = key;
+    return result;
+}();
+constexpr std::string_view categories[] = {"Hardware Security", "OS Security", "Windows Update", "Malware Protection",
+    "Network Security", "Encryption", "Account Security", "Hardening", "Software Hygiene", "Informational"};
+constexpr std::string_view basicState[] = {"Disabled", "Enabled", "Unknown"};
+constexpr std::string_view bitLockerState[] = {"Off", "On", "Unknown"};
 constexpr std::string_view tri[] = {"No", "Yes", "Unknown", "N/A"};
 constexpr std::string_view status[] = {"Error", "Success", "Unavailable", "NotFound", "AccessDenied", "Unsupported"};
 constexpr std::string_view antivirus[] = {"Disabled", "Enabled", "Unknown", "Snoozed", "Expired"};
@@ -85,9 +99,9 @@ Kind Type(std::string_view path) {
         "valueCount", "subkeyCount", "threshold", "fileCount", "dirCount", "total", "maximum", "maxPoints", "awardedPoints"};
     return std::ranges::find(numbers, name) != std::end(numbers) ? Kind::Number : Kind::Text;
 }
-std::string ShortKey(size_t index) {
+std::string ShortKey(size_t index, bool legacy = false) {
     char buffer[16];
-    const auto [end, error] = std::to_chars(std::begin(buffer), std::end(buffer), index, 36);
+    const auto [end, error] = std::to_chars(std::begin(buffer), std::end(buffer), legacy ? index : index + 1, legacy ? 36 : 10);
     if (error != std::errc{}) throw std::runtime_error("Invalid compact key");
     return {buffer, end};
 }
@@ -103,14 +117,13 @@ std::string Quote(std::string_view value) { return "\"" + std::string(value) + "
 // preserves number tokens while applying the versioned schema to primitive values.
 class Transform {
 public:
-    explicit Transform(bool encode) : encode_(encode), strings_{"\"Disabled\"", "\"Enabled\"", "\"Unknown\"", "\"N/A\""} {
-        for (size_t i = 0; i < strings_.size(); ++i) indices_.emplace(strings_[i], i);
-    }
+    explicit Transform(bool encode, bool legacy = false) : encode_(encode), legacy_(legacy) {}
     std::vector<std::string>& Strings() { return strings_; }
     std::string Run(std::string_view source) {
         source_ = source;
         position_ = 0;
         output_.clear();
+        output_.reserve(source.size());
         Value({}, 0);
         Space();
         if (position_ != source_.size()) throw std::runtime_error("Trailing JSON data");
@@ -118,8 +131,8 @@ public:
     }
 private:
     bool encode_;
+    bool legacy_;
     std::vector<std::string> strings_;
-    std::unordered_map<std::string, size_t> indices_;
     std::string_view source_;
     size_t position_ = 0;
     std::string output_;
@@ -166,29 +179,56 @@ private:
             Add(Quote(table[index]));
         }
     }
+    bool OmitDefault(const std::string& path) {
+        if (!encode_) return false;
+        const auto remaining = source_.substr(position_);
+        if (remaining.starts_with("\"\"") && Type(path) == Kind::Text) { position_ += 2; return true; }
+        if (remaining.starts_with("[]") && path != "score.rules") { position_ += 2; return true; }
+        // Preserve fields whose defaults are nonzero, and the required score
+        // envelope. Boolean and state fields are always written explicitly.
+        const auto name = std::string_view(path).substr(path.rfind('.') + 1);
+        if ((remaining.starts_with('0') || remaining.starts_with("null")) && Type(path) == Kind::Number &&
+            name != "defaultInbound" && name != "defaultOutbound" && name != "netbiosOptions" &&
+            name != "total" && name != "maximum") {
+            const auto saved = position_;
+            const auto token = Token();
+            if (token == "0" || token == "null") return true;
+            position_ = saved;
+        }
+        return false;
+    }
     void Value(const std::string& path, size_t depth) {
         if (depth > 128) throw std::runtime_error("Nesting limit");
         if (Take('{')) {
             Add("{");
             if (!Take('}')) {
+                bool first = true;
                 do {
                     const auto token = String();
                     const auto key = token.substr(1, token.size() - 2);
-                    std::string longKey;
+                    std::string longKey, encodedKey;
                     if (encode_) {
                         const auto found = std::ranges::find(keys, key);
-                        if (found == std::end(keys)) throw std::runtime_error("Unknown schema key");
+                        if (found == keys.end()) throw std::runtime_error("Unknown schema key");
                         longKey = *found;
-                        Add(Quote(ShortKey(found - std::begin(keys))));
+                        encodedKey = ShortKey(found - keys.begin());
                     } else {
-                        const size_t index = Integer(key, 36);
-                        if (index >= std::size(keys) || ShortKey(index) != key) throw std::runtime_error("Invalid schema key");
-                        longKey = keys[index]; Add(Quote(longKey));
+                        const size_t id = Integer(key, legacy_ ? 36 : 10);
+                        const auto count = legacy_ ? std::size(legacyKeys) : keys.size();
+                        if ((!legacy_ && !id) || id >= count + (legacy_ ? 0 : 1)) throw std::runtime_error("Invalid schema key");
+                        const auto index = legacy_ ? id : id - 1;
+                        if (ShortKey(index, legacy_) != key) throw std::runtime_error("Invalid schema key");
+                        longKey = legacy_ ? legacyKeys[index] : keys[index];
                     }
-                    Need(':'); Add(":");
-                    Value(path.empty() ? longKey : path + "." + longKey, depth + 1);
+                    Need(':'); Space();
+                    const auto fieldPath = path.empty() ? longKey : path + "." + longKey;
+                    if (!OmitDefault(fieldPath)) {
+                        if (!first) Add(",");
+                        first = false;
+                        Add(Quote(encode_ ? encodedKey : longKey)); Add(":");
+                        Value(fieldPath, depth + 1);
+                    }
                     if (!Take(',')) break;
-                    Add(",");
                 } while (true);
                 Need('}');
             }
@@ -219,15 +259,28 @@ private:
             else if (!encode_ && (value == "0" || value == "1")) Add(value == "1" ? "true" : "false");
             else throw std::runtime_error("Invalid Boolean code");
         } else if (kind == Kind::Text) {
-            if (encode_) {
-                if (!quoted) throw std::runtime_error("Expected text");
-                const auto [entry, inserted] = indices_.emplace(std::string(value), strings_.size());
-                if (inserted) strings_.emplace_back(value);
-                Add(std::to_string(entry->second));
-            } else {
+            if (legacy_) {
                 const auto index = Integer(value);
                 if (index >= strings_.size()) throw std::runtime_error("Invalid text reference");
                 Add(strings_[index]);
+            } else {
+                const auto name = std::string_view(path).substr(path.rfind('.') + 1);
+                const bool state = name == "state";
+                const bool bitLocker = name == "bitLockerState";
+                const auto raw = quoted ? value.substr(1, value.size() - 2) : value;
+                if (name == "category" && ((encode_ && std::ranges::find(categories, raw) != std::end(categories)) ||
+                    (!encode_ && !quoted))) {
+                    Enum(value, categories);
+                } else if (encode_ && (state || bitLocker) &&
+                    ((state && std::ranges::find(basicState, raw) != std::end(basicState)) ||
+                     (bitLocker && std::ranges::find(bitLockerState, raw) != std::end(bitLockerState)))) {
+                    if (state) Enum(value, basicState); else Enum(value, bitLockerState);
+                } else if (!encode_ && !quoted && (state || bitLocker)) {
+                    if (state) Enum(value, basicState); else Enum(value, bitLockerState);
+                } else {
+                    if (!quoted) throw std::runtime_error("Expected literal text");
+                    Add(value);
+                }
             }
         } else {
             if (quoted || value == "true" || value == "false") throw std::runtime_error("Expected number");
@@ -239,51 +292,46 @@ private:
 
 std::string CompactJson(std::string_view readable) {
     Transform codec(true);
-    auto data = codec.Run(readable);
-    std::string output = "{\"v\":1,\"s\":[";
-    bool comma = false;
-    for (const auto& text : codec.Strings()) {
-        if (comma) output += ',';
-        output += text;
-        comma = true;
-    }
-    return output + "],\"d\":" + data + "}";
+    return "{\"v\":2,\"d\":" + codec.Run(readable) + "}";
 }
 
 std::expected<std::wstring, std::wstring> ExpandCompactJson(IJsonObject* root) {
     double version = 0;
     if (FAILED(root->GetNamedNumber(HStringReference(L"v").Get(), &version)))
         return std::unexpected(L"The viewer supports compact exports only. Export again using --json 0; readable/plain-text reports cannot be viewed.");
-    if (version != 1) return std::unexpected(L"This compact report version is not supported.");
+    if (version != 1 && version != 2) return std::unexpected(L"This compact report version is not supported.");
     try {
-        ComPtr<IJsonArray> strings;
-        ComPtr<ABI::Windows::Foundation::Collections::IVector<IJsonValue*>> array;
         ComPtr<IJsonObject> data;
-        if (FAILED(root->GetNamedArray(HStringReference(L"s").Get(), strings.GetAddressOf())) ||
-            FAILED(strings.As(&array)) || FAILED(root->GetNamedObject(HStringReference(L"d").Get(), data.GetAddressOf())))
+        if (FAILED(root->GetNamedObject(HStringReference(L"d").Get(), data.GetAddressOf())))
             throw std::runtime_error("Invalid compact envelope");
-        UINT32 size = 0;
-        if (FAILED(array->get_Size(&size)) || size < 4 || size > 100000) throw std::runtime_error("Invalid text table");
-        Transform codec(false);
-        auto& table = codec.Strings();
-        const auto seed = table;
-        table.clear(); table.reserve(size);
-        for (UINT32 i = 0; i < size; ++i) {
-            ComPtr<IJsonValue> item;
-            JsonValueType type{};
-            HString text;
-            if (FAILED(array->GetAt(i, item.GetAddressOf())) || FAILED(item->get_ValueType(&type)) ||
-                type != JsonValueType_String || FAILED(item->Stringify(text.GetAddressOf())))
-                throw std::runtime_error("Invalid text table entry");
-            table.push_back(WideToUtf8(::WindowsGetStringRawBuffer(text.Get(), nullptr)));
-            if (i < seed.size() && table.back() != seed[i]) throw std::runtime_error("Invalid state dictionary");
+        Transform codec(false, version == 1);
+        if (version == 1) {
+            ComPtr<IJsonArray> strings;
+            ComPtr<ABI::Windows::Foundation::Collections::IVector<IJsonValue*>> array;
+            UINT32 size = 0;
+            if (FAILED(root->GetNamedArray(HStringReference(L"s").Get(), strings.GetAddressOf())) ||
+                FAILED(strings.As(&array)) || FAILED(array->get_Size(&size)) || size < 4 || size > 100000)
+                throw std::runtime_error("Invalid legacy text table");
+            auto& table = codec.Strings();
+            constexpr std::string_view seed[] = {"\"Disabled\"", "\"Enabled\"", "\"Unknown\"", "\"N/A\""};
+            table.reserve(size);
+            for (UINT32 i = 0; i < size; ++i) {
+                ComPtr<IJsonValue> item;
+                JsonValueType type{};
+                HString text;
+                if (FAILED(array->GetAt(i, item.GetAddressOf())) || FAILED(item->get_ValueType(&type)) ||
+                    type != JsonValueType_String || FAILED(item->Stringify(text.GetAddressOf())))
+                    throw std::runtime_error("Invalid legacy text entry");
+                table.push_back(WideToUtf8(::WindowsGetStringRawBuffer(text.Get(), nullptr)));
+                if (i < std::size(seed) && table.back() != seed[i]) throw std::runtime_error("Invalid legacy state dictionary");
+            }
         }
         ComPtr<IJsonValue> value;
         HString text;
         if (FAILED(data.As(&value)) || FAILED(value->Stringify(text.GetAddressOf()))) throw std::runtime_error("Invalid data");
         return Utf8ToWide(codec.Run(WideToUtf8(::WindowsGetStringRawBuffer(text.Get(), nullptr))));
     } catch (const std::runtime_error&) {
-        return std::unexpected(L"The compact report contains invalid keys, values or text references, or exceeds the display limits.");
+        return std::unexpected(L"The compact report contains invalid keys, values or legacy text references, or exceeds the display limits.");
     }
 }
 } // namespace sa

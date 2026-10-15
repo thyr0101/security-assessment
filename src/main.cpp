@@ -109,7 +109,7 @@ int wmain(int argc, wchar_t** argv) {
 
     if (json && !jsonFormat) {
         std::wcout << L"Choose a JSON export format:\n"
-            L"  0 - Compact: short keys, numeric states and shared text; opens in the backup viewer.\n"
+            L"  0 - Compact: numbered fields, direct values and numeric states; opens in the backup viewer.\n"
             L"  1 - Readable: descriptive fields and state names; for manual inspection, cannot be viewed in the app.\n"
             L"Compact encoding is not encryption. Both formats contain system details.\n"
             L"Enter 0 or 1: " << std::flush;

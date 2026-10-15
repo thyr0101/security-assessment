@@ -357,34 +357,6 @@ std::string RenderJson(const AssessmentResult& r) {
     }
     o << "],\"servicesStatus\":" << StatusS(r.services.status) << ",";
 
-    // applications
-    o << "\"applications\":[";
-    for (size_t i = 0; i < r.applications.size(); ++i) {
-        auto& a = r.applications[i];
-        if (i) o << ",";
-        o << "{\"name\":" << Q(a.name)
-          << ",\"installed\":" << B(a.installed)
-          << ",\"status\":" << StatusS(a.status)
-          << ",\"apps\":[";
-        for (size_t j = 0; j < a.apps.size(); ++j) {
-            auto& app = a.apps[j];
-            if (j) o << ",";
-            o << "{\"name\":" << Q(app.name)
-              << ",\"version\":" << Q(app.version)
-              << ",\"locations\":[";
-            for (size_t k = 0; k < app.locations.size(); ++k) {
-                auto& loc = app.locations[k];
-                if (k) o << ",";
-                o << "{\"path\":" << Q(loc.path)
-                  << ",\"version\":" << Q(loc.version)
-                  << ",\"sha256\":" << Q(loc.sha256) << "}";
-            }
-            o << "]}";
-        }
-        o << "]}";
-    }
-    o << "],";
-
     // registryFindings
     o << "\"registryFindings\":[";
     for (size_t i = 0; i < r.registryFindings.size(); ++i) {

@@ -368,31 +368,6 @@ struct WindowsUpdateInfo {
     Status status = Status::Unavailable;
 };
 
-struct ApplicationDefinition {
-    std::wstring name;
-    std::vector<std::wstring> possiblePaths; // may include env vars
-};
-
-struct ApplicationLocation {
-    std::wstring path;
-    std::wstring version;
-    std::wstring sha256;    // empty if hashing failed or --no-hash was given
-};
-
-struct InstalledApplication {
-    std::wstring name;
-    std::wstring version;                        // version of the first location that reports one
-    std::vector<ApplicationLocation> locations;  // every place this application was found
-};
-
-// One entry per ApplicationDefinition, i.e. per category.
-struct ApplicationFinding {
-    std::wstring name;                           // category name
-    bool installed = false;                      // at least one application found
-    std::vector<InstalledApplication> apps;      // every application found in this category
-    Status status = Status::NotFound;
-};
-
 struct RegistryScanDefinition {
     std::wstring name;
     HKEY root;
@@ -481,7 +456,6 @@ struct AssessmentResult {
     HardeningInfo hardening;
     ServiceReport services;
     WindowsUpdateInfo windowsUpdate;
-    std::vector<ApplicationFinding> applications;
     std::vector<RegistryFinding> registryFindings;
     std::vector<DirectoryFinding> directoryFindings;
     PersistenceReport persistence;

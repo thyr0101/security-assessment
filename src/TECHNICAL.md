@@ -29,7 +29,7 @@ All runtime dependencies are Windows components or the C++ runtime. No Python pa
 | `Collectors/NetworkCollector`, `HardeningCollector` | SMB/remote-access configuration, local account lockout, Guest identity, and device/credential safeguards. |
 | `Collectors/StorageCollector` | Physical disks, volume extents, and BitLocker status. |
 | `Collectors/WindowsUpdateCollector` | Offline cached updates, service readiness, restart status, and installation history. |
-| `Collectors/ApplicationCollector`, `PersistenceCollector` | Selected applications, startup locations, and threshold scans. |
+| `Collectors/PersistenceCollector` | Startup locations and threshold scans. |
 | `RegistryReader`, `WmiHelper`, `Utilities` | Native resource ownership, typed extraction, hashing, and shared helpers. |
 | `Security/ScoreEngine` | Applies rules, totals weights, and generates ranked warnings. |
 | `Output/ConsoleRenderer`, `JsonRenderer` | Human-readable presentation and UTF-8 JSON serialization. |
@@ -74,7 +74,7 @@ Stable IDs such as `net.ntlm` remain machine-facing identifiers; user-facing lab
 ## CLI, export, and viewer
 
 ```text
-SecurityAssessment [--no-hash] [--json [output-file]]
+SecurityAssessment [--json [output-file]]
 SecurityAssessment --json view <report-file>
 ```
 
@@ -82,12 +82,12 @@ SecurityAssessment --json view <report-file>
 - `--json` runs the assessment and creates a UTF-8 file without a BOM. A generated `security-assessment-YYYYMMDD-HHMMSS-mmm-PID.json` filename uses the system's local clock and current folder.
 - An explicit destination is resolved from the current folder. Parents must exist. `CREATE_NEW` prevents replacement of existing files, including links. Writes are exclusive and flushed before success is reported; failed writes mark the owned handle for deletion where possible.
 - Export prints only a confirmation/path. It no longer emits JSON on stdout. This intentionally changes the old CLI contract.
-- `--json view <file>` reads a saved report without running collectors. It accepts UTF-8 with or without a BOM, validates JSON and the system/score/rules structure with Windows' parser, then restores the typed assessment model and renders the regular console report with a prominent offline notice. Saved scores and rules are preserved without calling collectors or the score engine. Validation checks report structure, not provenance or authenticity.
+- `--json view <file>` reads a saved report without running collectors. It accepts UTF-8 with or without a BOM, validates JSON and the system/score/rules structure with Windows' parser, then restores the typed assessment model and renders the regular console report with a red backup warning box between the title and System section. Saved scores and rules are preserved without calling collectors or the score engine. Validation checks report structure, not provenance or authenticity.
 - The viewer accepts up to 64 MiB input, nesting up to 128 levels, 100,000 items per array, and 4,096 score rules with descriptions up to 16,384 UTF-8 bytes. Typed fields, numeric ranges, and rule score bounds are validated; imported terminal control characters are displayed as visible Unicode escapes. Invalid encoding, malformed JSON, unrelated JSON, unavailable files, and excessive input fail with an error.
-- `--no-hash` affects assessment only and cannot be combined with view mode. Unexpected arguments and duplicate `--json` are rejected before collecting data.
+- `--no-hash` remains accepted as a legacy no-op for assessment scripts and cannot be combined with view mode. Application collection and executable hashing no longer run. Unexpected arguments and duplicate `--json` are rejected before collecting data.
 - Exit codes: 0 for success/help, 1 for file/runtime output errors, 2 for invalid arguments. The score does not control the exit code.
 
-JSON retains the `system`, `hardware`, `security`, `defender`, `antivirus`, `firewall`, `storage`, `network`, `hardening`, `services`, `applications`, `registryFindings`, `directoryFindings`, `persistence`, `windowsUpdate`, and `score` report data. Native boolean readings must be interpreted with their accompanying status fields. Warnings are omitted from exports and ignored when importing older files. The viewer explicitly displays “Warnings are disabled when viewing an export”. The viewer supports older report layouts as long as their system and score structure remains recognizable; absent optional fields keep their model defaults.
+JSON retains the `system`, `hardware`, `security`, `defender`, `antivirus`, `firewall`, `storage`, `network`, `hardening`, `services`, `registryFindings`, `directoryFindings`, `persistence`, `windowsUpdate`, and `score` report data. Native boolean readings must be interpreted with their accompanying status fields. Warnings are omitted from exports and ignored when importing older files. The viewer explicitly displays “Warnings are disabled when viewing an export”. The viewer supports older report layouts as long as their system and score structure remains recognizable; absent optional fields keep their model defaults.
 
 ## Console and warnings
 
@@ -104,8 +104,12 @@ ctest --test-dir build-tests -C Release --output-on-failure
 python tests/smoke.py build-tests/Release
 ```
 
-Native fixtures use private temporary files and registry data. They cover parsing, ownership, rule boundaries, partial readings, score sums, antivirus fallback, hidden console fields, and JSON save/view behavior. Smoke checks cover file export, automatic filenames, viewer round trips, no-overwrite behavior, invalid arguments, both hashing modes, help, and redirected console output.
+Native fixtures use private temporary files and registry data. They cover parsing, ownership, rule boundaries, partial readings, score sums, antivirus fallback, hidden console fields, and JSON save/view behavior. Smoke checks cover file export, automatic filenames, viewer round trips, no-overwrite behavior, invalid arguments, legacy CLI compatibility, removed application inventory, help, and redirected console output.
 
 Optional MSVC `/analyze` and AddressSanitizer builds can check static and memory errors. The previous review passed Debug/Release regressions, live non-admin smoke runs, static analysis, and AddressSanitizer; elevated TPM/BitLocker provider collection was not run live. Synthetic tests cover how those provider results affect scoring.
 
 Set `SA_TRACE_TIMINGS=1` to emit per-collector durations to stderr. Prior measured non-admin runs dropped from a 10.994-second profiled baseline to a median of 0.802 seconds over five warm Release JSON runs after avoiding restricted WMI waits and overlapping collectors. Different machines/provider cache states will differ. C++23 typed errors (`std::expected`), owned output pointers (`std::out_ptr`), ranges, joined workers, and bounded topology traversal support safer collection without third-party dependencies.
+
+## Local archive
+
+`archived/ApplicationCollector.cpp` and `archived/ApplicationCollector.h` preserve the removed collector locally. `/archived/` is ignored by Git and is outside the build source tree; builds and tests do not depend on these files. New JSON exports omit applications, and the viewer ignores application data in older exports. Removing the informational application rule does not change the 1000-point scale.

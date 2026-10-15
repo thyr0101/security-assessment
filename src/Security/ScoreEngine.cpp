@@ -569,16 +569,6 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
         : Full({ "hyg.startup", "Startup application scan", 0, Category::SoftwareHygiene },
                std::to_string(a.persistence.entries.size()) + " startup entries found in the selected locations.", "Complete"));
 
-    const bool inventoryComplete = !a.applications.empty() && std::all_of(
-        a.applications.begin(), a.applications.end(), [](const ApplicationFinding& app) {
-            return app.status == Status::Success || app.status == Status::NotFound;
-        });
-    rep.rules.push_back(inventoryComplete ? Full({ "hyg.appinv", "Selected application scan", 0,
-                               Category::SoftwareHygiene },
-                             "Installation status was checked for every application in the configured list.", "Complete")
-        : Zero({ "hyg.appinv", "Selected application scan", 0, Category::SoftwareHygiene },
-               "Unknown", "Application inventory could not be completed."));
-
     // Failed collection must not become a definite disabled/absent state or earn points.
     for (auto& rule : rep.rules) {
         bool unknown = false;

@@ -86,6 +86,37 @@ void Banner(const wchar_t* title) {
     out() << Dim() << Repeat(GHLine(), kWidth) << Rst() << L"\n";
 }
 
+// Keep the backup notice between the title and the report, including when
+// redirected. Width follows the terminal, with ASCII borders for plain output.
+void BackupWarning() {
+    const size_t width = (std::min)(kWidth, g_width - 4);
+    const size_t inner = width - 4;
+    const auto vertical = g_color ? L"\u2502" : L"|";
+    auto edge = [&](const wchar_t* left, const wchar_t* right) {
+        out() << L"  " << Bold() << Red() << left << Repeat(GHLine(), width - 2) << right << Rst() << L"\n";
+    };
+    auto row = [&](std::wstring_view text) {
+        out() << L"  " << Bold() << Red() << vertical << L" " << PadRight(std::wstring(text), inner)
+              << L" " << vertical << Rst() << L"\n";
+    };
+    out() << L"\n";
+    edge(g_color ? L"\u250C" : L"+", g_color ? L"\u2510" : L"+");
+    row(L"[!] BACKUP REPORT");
+    row(L"");
+    std::wstring_view message = L"You are viewing a backup. These results do not represent the current system state.";
+    while (!message.empty()) {
+        size_t count = (std::min)(inner, message.size());
+        if (count < message.size()) {
+            const auto space = message.rfind(L' ', count);
+            if (space != std::wstring_view::npos && space) count = space;
+        }
+        row(message.substr(0, count));
+        message.remove_prefix(count);
+        while (!message.empty() && message.front() == L' ') message.remove_prefix(1);
+    }
+    edge(g_color ? L"\u2514" : L"+", g_color ? L"\u2518" : L"+");
+}
+
 void Section(const wchar_t* title) {
     const std::wstring t = title;
     const size_t used = 3 + t.size() + 1;
@@ -218,10 +249,8 @@ const wchar_t* OutcomeColor(int awarded, int max) {
 void RenderConsole(const AssessmentResult& r, ReportView view) {
     ConsoleStyle style;
 
-    if (view == ReportView::Export) {
-        out() << Bold() << Yel() << L"[!] Viewing a saved file. These results are not live." << Rst() << L"\n\n";
-    }
     Banner(L"Windows Security Assessment");
+    if (view == ReportView::Export) BackupWarning();
 
     // ------------------------------------------------------------ System
     Section(L"System");
@@ -514,35 +543,9 @@ void RenderConsole(const AssessmentResult& r, ReportView view) {
     for (size_t i = 0; i < unmapped.size(); ++i) renderVolume(*unmapped[i], i + 1 == unmapped.size());
     if (indices.empty() && unmapped.empty()) KV(L"Storage query", ToW(r.storage.status), Yel());
 
-    // ------------------------------------------------------------ Applications
-    Section(L"Applications");
-    for (auto& category : r.applications) {
-        const bool complete = category.status == Status::Success || category.status == Status::NotFound;
-        SubHeader(category.name,
-                  !complete ? L"Incomplete (" + std::wstring(ToW(category.status)) + L")"
-                  : category.apps.empty() ? std::wstring(L"none found")
-                                        : Num(category.apps.size()) + L" found",
-                  !complete ? Yel() : category.apps.empty() ? Dim() : Grn());
-        for (auto& app : category.apps) {
-            out() << L"    " << Grn() << L"[+] " << Rst() << Bold() << Wht() << app.name << Rst();
-            if (!app.version.empty()) out() << L"  " << Cyn() << app.version << Rst();
-            out() << L"\n";
-            for (size_t i = 0; i < app.locations.size(); ++i) {
-                const auto& loc = app.locations[i];
-                const bool lastLoc = (i + 1 == app.locations.size());
-                out() << L"        " << Dim() << (lastLoc ? GCorner() : GTee()) << Rst() << L" "
-                      << Dim() << loc.path << Rst();
-                // Only mention a version here when it differs from the one shown above.
-                if (!loc.version.empty() && loc.version != app.version)
-                    out() << L"  " << Dim() << L"(" << loc.version << L")" << Rst();
-                out() << L"\n";
-            }
-        }
-    }
-
-    SubHeader(L"Inventory Coverage (informational)", L"", Dim());
+    Section(L"Inventory Coverage (informational)");
     for (const auto& rule : r.score.rules)
-        if (rule.id == "hyg.startup" || rule.id == "hyg.appinv")
+        if (rule.id == "hyg.startup")
             KV(Utf8ToWide(rule.description).c_str(), Utf8ToWide(rule.state), rule.state == "Unknown" ? Yel() : Cyn());
 
     // ------------------------------------------------------------ Threshold findings

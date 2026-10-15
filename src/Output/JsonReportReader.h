@@ -434,20 +434,6 @@ inline AssessmentResult ReadReport(const Object& root) {
     }
     root.Field(L"servicesStatus", result.services.status);
     root.Items(L"services", result.services.entries, ReadService);
-    root.Items(L"applications", result.applications, [](const Object& object, auto& item) {
-        object.Field(L"name", item.name);
-        object.Field(L"installed", item.installed);
-        object.Field(L"status", item.status);
-        object.Items(L"apps", item.apps, [](const Object& app, auto& entry) {
-            app.Field(L"name", entry.name);
-            app.Field(L"version", entry.version);
-            app.Items(L"locations", entry.locations, [](const Object& location, auto& value) {
-                location.Field(L"path", value.path);
-                location.Field(L"version", value.version);
-                location.Field(L"sha256", value.sha256);
-            });
-        });
-    });
     root.Items(L"registryFindings", result.registryFindings, [](const Object& object, auto& item) {
         object.Field(L"name", item.name);
         object.Field(L"path", item.path);

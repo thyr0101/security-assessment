@@ -74,3 +74,6 @@ Testing/
 
 # Locally generated assessment reports
 /security-assessment-*.json
+
+# Local archived source files
+/archived/

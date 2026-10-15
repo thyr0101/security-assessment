@@ -24,7 +24,10 @@ def export_report(app, *options):
         assert output.startswith('JSON report saved to:') and not output.lstrip().startswith('{')
         report = json.loads(path.read_text(encoding='utf-8'))
         viewed, _ = run(app, '--json', 'view', str(path))
-        assert viewed.startswith('[!] Viewing a saved file. These results are not live.')
+        assert viewed.startswith('Windows Security Assessment')
+        assert viewed.index('Windows Security Assessment') < viewed.index('[!] BACKUP REPORT') < viewed.index('-- System')
+        assert 'You are viewing a backup.' in viewed and 'current system state.' in viewed
+        assert '-- Applications' not in viewed
         assert 'Windows Security Assessment' in viewed and 'Rule breakdown' in viewed
         assert 'Warnings are disabled when viewing an export' in viewed
         assert 'No warnings from the evaluated checks.' not in viewed
@@ -104,7 +107,7 @@ def main():
     assert invalid.returncode == 2 and b'Unknown option:' in invalid.stderr and not invalid.stdout
     report, no_hash_time = export_report(app, '--no-hash')
     expected = {'system', 'hardware', 'security', 'defender', 'firewall', 'storage', 'network',
-                'services', 'applications', 'registryFindings', 'directoryFindings', 'persistence', 'score', 'windowsUpdate'}
+                'services', 'registryFindings', 'directoryFindings', 'persistence', 'score', 'windowsUpdate'}
     assert expected <= report.keys()
     assert report['score']['maximum'] == sum(r['maxPoints'] for r in report['score']['rules']) == 1000
     assert report['score']['total'] == sum(r['awardedPoints'] for r in report['score']['rules'])
@@ -142,14 +145,13 @@ def main():
             assert rules[rule_id]['state'] == 'Unknown' and rules[rule_id]['awardedPoints'] == 0
     assert len({s['name'].lower() for s in report['services']}) == len(report['services'])
     assert all(f['name'] for f in report['registryFindings'])
-    assert all(not loc['sha256'] for group in report['applications'] for app_item in group['apps'] for loc in app_item['locations'])
-    hashed, hash_time = export_report(app)
-    for group in hashed['applications']:
-        for app_item in group['apps']:
-            for loc in app_item['locations']:
-                assert not loc['sha256'] or len(loc['sha256']) == 64
+    assert 'applications' not in report
+    assert 'hyg.appinv' not in rules
+    normal, default_time = export_report(app)
+    assert 'applications' not in normal
     console, _ = run(app, '--no-hash')
     assert 'SECURITY SCORE' in console and '\x1b[' not in console
+    assert 'BACKUP REPORT' not in console and '-- Applications' not in console
     assert 'Windows update details available' not in console
     assert console.index('Rule breakdown') < console.index('SECURITY SCORE') < console.index('-- Warnings')
     assert all(hidden not in console for hidden in ['Active Network Adapters', 'UDP Port 69', 'Configured RDP port', 'RDP scope', 'Local TCP Listeners'])
@@ -167,8 +169,8 @@ def main():
         assert invalid.returncode == 2 and not invalid.stdout
     assert 'privacy' not in report and 'minimumPasswordLength' not in report['hardening']
     assert all(rule['id'] != 'acc.password' for rule in report['score']['rules'])
-    print(f"Smoke checks passed: JSON files/viewer, hashes, help, redirected console; elevated={report['security']['elevated']}.")
-    print(f"Elapsed: --no-hash {no_hash_time:.3f}s; hashing {hash_time:.3f}s (single runs, not a benchmark).")
+    print(f"Smoke checks passed: JSON files/viewer, removed applications, help, redirected console; elevated={report['security']['elevated']}.")
+    print(f"Elapsed: --no-hash {no_hash_time:.3f}s; default {default_time:.3f}s (single runs, not a benchmark).")
     if args.baseline:
         with tempfile.TemporaryDirectory(prefix='sa-baseline-') as folder:
             baseline_text, elapsed = run(args.baseline.resolve(), '--json', '--no-hash', cwd=folder)
@@ -178,7 +180,7 @@ def main():
                 exported = list(Path(folder).glob('security-assessment-*.json'))
                 assert len(exported) == 1
                 baseline = json.loads(exported[0].read_text(encoding='utf-8'))
-            assert baseline.keys() - {'privacy'} <= report.keys()
+            assert baseline.keys() - {'privacy', 'applications'} <= report.keys()
             print(f"Baseline export: {elapsed:.3f}s; retained report sections preserved.")
 
 

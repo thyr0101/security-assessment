@@ -1,6 +1,5 @@
 #include "Utilities.h"
 #include "RegistryReader.h"
-#include "Collectors/ApplicationCollector.h"
 #include "Collectors/AntivirusCollector.h"
 #include "Collectors/DefenderCollector.h"
 #include <ranges>
@@ -88,17 +87,6 @@ static void TestFiles(Fixture& fixture) {
     const std::wstring digest = L"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
     Check(FileSha256(app.wstring()) == digest, "SHA-256 known vector");
     Check(!FileSha256((fixture.dir / L"missing").wstring()), "missing hash input");
-    const std::vector<ApplicationDefinition> definitions{{L"fixture", {
-        L"Example|" + (fixture.dir / L"*.exe").wstring(), L"Example|" + app.wstring()}}};
-    const auto apps = CollectApplications(definitions);
-    Check(apps.size() == 1 && apps[0].apps.size() == 1 && apps[0].apps[0].locations.size() == 1,
-          "deduplicate app paths and exclude directories");
-    Check(apps[0].apps[0].locations[0].sha256 == digest, "application hash");
-    Check(CollectApplications(definitions, false)[0].apps[0].locations[0].sha256.empty(), "hash suppression");
-    const auto relative = CollectApplications({{L"relative", {L"Example|" + fs::relative(app).wstring(),
-        L"Example|" + app.wstring()}}}, false);
-    Check(relative[0].apps.size() == 1 && relative[0].apps[0].locations.size() == 1,
-          "relative and absolute paths must identify one executable");
     const auto scans = RunDirectoryScans({{L"flat", fixture.dir.wstring(), 1, false},
         {L"recursive", fixture.dir.wstring(), 1, true}, {L"missing", (fixture.dir / L"missing").wstring(), 0, false}});
     Check(scans[0].fileCount == 1 && !scans[0].exceeded, "flat directory scan");
@@ -161,7 +149,6 @@ static void TestScoreAndJson() {
     result.storage.status = Status::Success;
     result.storage.volumes.push_back(volume);
     result.persistence.status = Status::Success;
-    ApplicationFinding app; app.status = Status::NotFound; result.applications.push_back(app);
     result.network.status = Status::Success;
     for (auto* setting : {&result.network.smb1Server, &result.network.smb1Client,
                           &result.network.smbGuestLogons, &result.network.llmnr, &result.network.rdp}) {
@@ -204,7 +191,7 @@ static void TestScoreAndJson() {
     d.threatsCount = 0;
     for (const auto* id : {"hw.tpm2", "hw.virt", "hw.aes", "hw.nx", "hw.vbs", "hw.hvci", "os.win11",
                            "os.patch", "mp.defender", "mp.threats", "net.in", "net.svc", "enc.bl", "enc.tpm",
-                           "acc.uac2", "acc.elev", "acc.hello", "hyg.startup", "hyg.appinv"}) {
+                           "acc.uac2", "acc.elev", "acc.hello", "hyg.startup"}) {
         Check(Rule(healthy, id).state != "Enabled", "capabilities, facts, and scan results do not use Enabled");
     }
     int sum = 0; for (const auto& rule : healthy.rules) sum += rule.awardedPoints;
@@ -417,14 +404,7 @@ static void TestPartialCollection() {
     Check(Rule(ComputeScore(result), "hw.secureboot").awardedPoints == 0, "failed Secure Boot read cannot earn stale credit");
     result.security.virt.runningServicesKnown = result.security.virt.hvciEnabled = true;
     Check(Rule(ComputeScore(result), "hw.hvci").awardedPoints == 0, "failed virtualization read cannot earn stale HVCI credit");
-    result.applications.push_back(ApplicationFinding{});
-    result.applications[0].name = L"Blocked app inventory"; result.applications[0].status = Status::AccessDenied;
     result.score = ComputeScore(result);
-    std::wostringstream captured;
-    auto* old = std::wcout.rdbuf(captured.rdbuf());
-    try { RenderConsole(result); } catch (...) { std::wcout.rdbuf(old); throw; }
-    std::wcout.rdbuf(old);
-    Check(captured.str().find(L"Incomplete (AccessDenied)") != std::wstring::npos, "blocked application scan is displayed as incomplete");
     std::ofstream("partial-output.json", std::ios::binary) << RenderJson(result);
 }
 
@@ -569,13 +549,13 @@ static void TestJsonFiles(Fixture& fixture) {
     StorageVolume volume; volume.mountPoint = L"Z:\\"; volume.diskIndices = {3}; volume.bitLockerState = L"On";
     volume.totalBytes = 1ull << 40; volume.freeBytes = 1ull << 39;
     result.storage.volumes.push_back(volume);
-    ApplicationFinding app; app.name = L"Saved apps"; app.status = Status::Success;
-    app.apps.push_back({L"SAVED_APP", L"1.2", {{L"Z:\\Saved.exe", L"1.2", L"saved-hash"}}});
-    result.applications.push_back(app);
     result.score.total = 321; // A recorded score must never be recomputed during viewing.
     Check(!result.score.warnings.empty(), "fixture has live warnings to exclude");
     const auto text = RenderJson(result);
     Check(text.find("\"warnings\"") == std::string::npos, "JSON exports omit warnings by default");
+    Check(text.find("\"applications\"") == std::string::npos, "JSON exports omit removed applications");
+    Check(std::ranges::none_of(result.score.rules, [](const auto& rule) { return rule.id == "hyg.appinv"; }),
+          "removed application inventory does not create scoring rules or verification gaps");
     const auto path = fixture.dir / L"saved report \u03a9.json";
     const auto saved = SaveJsonReport(text, path);
     Check(saved.has_value() && fs::exists(path), "save JSON to a Unicode path with spaces");
@@ -586,8 +566,15 @@ static void TestJsonFiles(Fixture& fixture) {
     const auto console = CaptureConsole(*viewed, ReportView::Export);
     const auto live = CaptureConsole(result);
     const auto banner = console.find(L"Windows Security Assessment");
-    Check(console.find(L"Viewing a saved file. These results are not live.") < banner, "offline warning precedes the report");
-    Check(console.substr(banner, console.find(L"-- Warnings") - banner) == live.substr(0, live.find(L"-- Warnings")),
+    const auto warning = console.find(L"[!] BACKUP REPORT");
+    const auto system = console.find(L"-- System");
+    Check(banner < warning && warning < system, "boxed backup warning appears between title and System");
+    Check(console.find(L"+------------------------------------------------------------+") != std::wstring::npos &&
+          console.find(L"current system state.") != std::wstring::npos, "backup warning has a plain-text box and explains stale data");
+    Check(live.find(L"BACKUP REPORT") == std::wstring::npos && console.find(L"-- Applications") == std::wstring::npos,
+          "live reports have no backup box and applications are removed");
+    Check(console.substr(system, console.find(L"-- Warnings") - system) ==
+          live.substr(live.find(L"-- System"), live.find(L"-- Warnings") - live.find(L"-- System")),
           "saved report uses the same display as the live report before warnings");
     Check(console.find(L"Warnings are disabled when viewing an export") != std::wstring::npos &&
           console.find(L"verification gap") == std::wstring::npos, "export viewer explicitly disables security warnings");
@@ -609,8 +596,10 @@ static void TestJsonFiles(Fixture& fixture) {
     auto legacy = text;
     legacy.insert(legacy.size() - 2, ",\"warnings\":[{\"title\":\"OLD_WARNING_SENTINEL\"}]");
     std::ofstream(bad, std::ios::binary) << legacy;
+    legacy.insert(legacy.size() - 1, ",\"applications\":[{\"name\":\"OLD_APPLICATION_SENTINEL\"}]");
+    std::ofstream(bad, std::ios::binary) << legacy;
     auto old = ReadJsonReport(bad);
-    Check(old && old->score.warnings.empty() && RenderJson(*old) == text, "legacy warning arrays are ignored");
+    Check(old && old->score.warnings.empty() && RenderJson(*old) == text, "legacy warnings and application arrays are ignored");
     std::ofstream(bad, std::ios::binary) << R"({"system":{"productName":"\u001b[2J\nspoof"},"score":{"total":7,"maximum":10,"rules":[]}})";
     auto controls = ReadJsonReport(bad);
     Check(controls && controls->os.productName == L"\\u001B[2J\\u000Aspoof", "imported controls cannot inject terminal escapes");

@@ -63,7 +63,6 @@
     <ClCompile Include="src\Collectors\NetworkCollector.cpp" />
     <ClCompile Include="src\Collectors\HardeningCollector.cpp" />
     <ClCompile Include="src\Collectors\StorageCollector.cpp" />
-    <ClCompile Include="src\Collectors\ApplicationCollector.cpp" />
     <ClCompile Include="src\Collectors\PersistenceCollector.cpp" />
     <ClCompile Include="src\Collectors\WindowsUpdateCollector.cpp" />
     <ClCompile Include="src\Security\ScoreEngine.cpp" />
@@ -86,7 +85,6 @@
     <ClInclude Include="src\Collectors\NetworkCollector.h" />
     <ClInclude Include="src\Collectors\HardeningCollector.h" />
     <ClInclude Include="src\Collectors\StorageCollector.h" />
-    <ClInclude Include="src\Collectors\ApplicationCollector.h" />
     <ClInclude Include="src\Collectors\PersistenceCollector.h" />
     <ClInclude Include="src\Collectors\WindowsUpdateCollector.h" />
     <ClInclude Include="src\Security\ScoreEngine.h" />

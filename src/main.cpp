@@ -20,7 +20,6 @@
 #include "Collectors/NetworkCollector.h"
 #include "Collectors/HardeningCollector.h"
 #include "Collectors/StorageCollector.h"
-#include "Collectors/ApplicationCollector.h"
 #include "Collectors/PersistenceCollector.h"
 #include "Collectors/WindowsUpdateCollector.h"
 #include "Security/ScoreEngine.h"
@@ -58,7 +57,7 @@ int wmain(int argc, wchar_t** argv) {
         ~ConsoleCodePage() { if (changed) ::SetConsoleOutputCP(original); }
     } consoleCodePage;
 
-    constexpr auto usage = L"Usage: SecurityAssessment [--no-hash] [--json [output-file]]\n"
+    constexpr auto usage = L"Usage: SecurityAssessment [--json [output-file]]\n"
         L"       SecurityAssessment --json view <report-file>\n";
     bool json = false, viewJson = false, noHash = false;
     std::filesystem::path jsonPath;
@@ -80,7 +79,7 @@ int wmain(int argc, wchar_t** argv) {
             } else if (i + 1 < argc && !std::wstring_view(argv[i + 1]).starts_with(L"-")) {
                 jsonPath = argv[++i];
             }
-        } else if (argument == L"--no-hash") noHash = true;
+        } else if (argument == L"--no-hash") noHash = true; // Legacy no-op: application hashing was removed.
         else if (argument == L"--help" || argument == L"-h") {
             std::wcout << usage;
             return 0;
@@ -104,7 +103,17 @@ int wmain(int argc, wchar_t** argv) {
 
     // Independent collectors write distinct result fields. Four COM-initialized
     // workers overlap provider waits while keeping output and scoring deterministic.
+    // Start the slow update/antivirus providers first to reduce the final wait.
     const auto tasks = std::to_array<std::function<void()>>({
+        [&] {
+            try { r.windowsUpdate = Timed(L"windowsUpdate", [&] { return CollectWindowsUpdateInfo(); }); }
+            catch (...) { r.windowsUpdate.status = r.windowsUpdate.pendingStatus = Status::Error;
+                              r.windowsUpdate.pendingReason = L"Windows Update collection failed."; }
+        },
+        [&] {
+            try { r.defender = Timed(L"defender", [&] { return CollectDefenderInfo(); }); }
+            catch (...) { r.defender.status = Status::Error; }
+        },
         [&] {
             try { r.os = Timed(L"os", [&] { return CollectOsInfo(); }); }
             catch (...) { r.os.status = Status::Error; }
@@ -120,10 +129,6 @@ int wmain(int argc, wchar_t** argv) {
         [&] {
             try { r.security = Timed(L"security", [&] { return CollectSecurityInfo(); }); }
             catch (...) { r.security.tpm.status = Status::Error; }
-        },
-        [&] {
-            try { r.defender = Timed(L"defender", [&] { return CollectDefenderInfo(); }); }
-            catch (...) { r.defender.status = Status::Error; }
         },
         [&] {
             try { r.antivirus = Timed(L"antivirus", [&] { return CollectAntivirusInfo(); }); }
@@ -148,15 +153,6 @@ int wmain(int argc, wchar_t** argv) {
         [&] {
             try { r.services = Timed(L"services", [&] { return CollectSecurityServices(); }); }
             catch (...) { r.services.status = Status::Error; }
-        },
-        [&] {
-            try { r.windowsUpdate = Timed(L"windowsUpdate", [&] { return CollectWindowsUpdateInfo(); }); }
-            catch (...) { r.windowsUpdate.status = r.windowsUpdate.pendingStatus = Status::Error;
-                              r.windowsUpdate.pendingReason = L"Windows Update collection failed."; }
-        },
-        [&] {
-            try { r.applications = Timed(L"applications", [&] { return CollectApplications(DefaultApplicationList(), !noHash); }); }
-            catch (...) {}
         },
         [&] {
             try { r.registryFindings = Timed(L"registryFindings", [&] { return RunRegistryScans(DefaultRegistryScans()); }); }

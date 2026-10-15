@@ -14,7 +14,7 @@ It uses built-in Windows interfaces. It does not contact online services, run ex
 - **Account protection:** secure permission prompts, the built-in Guest account, account lockout, and Remote Assistance invitations.
 - **Windows Update:** pending updates, update services, restart requirements, and installation results. Pending updates are listed without affecting the score.
 
-The report also includes selected installed applications and startup/threshold scan results. Privacy settings and minimum password length are not collected.
+The report also includes startup and threshold scan results. Privacy settings and minimum password length are not collected.
 
 ## Run an assessment
 
@@ -25,12 +25,6 @@ Windows 10 or newer is required. Open a terminal in the folder containing the ex
 ```
 
 Run the terminal **as administrator** for the fullest assessment. Without elevation, restricted checks remain unverified instead of being reported as disabled.
-
-To skip executable hashing:
-
-```powershell
-.\SecurityAssessment.exe --no-hash
-```
 
 The console ends with the **rule breakdown**, **total score**, and **warnings**, in that order. Warnings are grouped as Critical, High, Medium, or Low and include an action to review. Missing evidence is clearly identified as a verification gap.
 
@@ -46,7 +40,6 @@ Or choose a filename:
 
 ```powershell
 .\SecurityAssessment.exe --json "reports\assessment.json"
-.\SecurityAssessment.exe --json "assessment.json" --no-hash
 ```
 
 The destination folder must exist. Existing files are never overwritten. The command prints the saved file's path, rather than the report contents.
@@ -57,7 +50,7 @@ The destination folder must exist. Existing files are never overwritten. The com
 .\SecurityAssessment.exe --json view "assessment.json"
 ```
 
-This opens the regular console report using the saved data and scores. A notice at the top states that you are viewing a file and the results are not live. It does not run another assessment.
+This opens the regular console report using the saved data and scores. A red warning box below the title states that you are viewing a backup and the results do not represent the current system state. It does not run another assessment.
 
 Warnings are omitted from JSON exports. The saved report viewer displays **“Warnings are disabled when viewing an export”**, including when opening older reports that contain warnings. Older reports with the expected system and score structure remain supported; fields absent from those files cannot be restored.
 

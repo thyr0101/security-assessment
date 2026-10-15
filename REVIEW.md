@@ -76,3 +76,25 @@ One local run observed 10.283 seconds for the updated `--json --no-hash` and 18.
 - [Defender running modes](https://learn.microsoft.com/en-us/defender-endpoint/microsoft-defender-antivirus-windows#check-the-state-of-microsoft-defender-antivirus-on-your-device)
 - [Smart App Control evaluation and enforcement](https://learn.microsoft.com/en-us/windows/apps/develop/smart-app-control/overview)
 - [Native processor power information structure omitted from SDK headers](https://learn.microsoft.com/en-us/windows/win32/power/processor-power-information-str)
+
+## 2026-10-15: hardening, warnings, and latency review
+
+### Connections and changes
+
+`main.cpp` runs independent collectors through a bounded group of joined workers. Each initializes COM on its own thread and writes a distinct assessment field. `HardeningCollector` adds native LSA-process, account-policy, and registry-policy readings to `AssessmentResult::hardening`. `ScoreEngine` evaluates the rebalanced rules and derives severity-ranked warnings without further deductions. `ConsoleRenderer` groups relevant controls and ends with breakdown, score, and warnings; `JsonRenderer` preserves existing inventories and adds the hardening/warning fields. `PrivacyCollector` separates metadata from small typed read/precedence helpers, with injectable registry roots for isolated tests.
+
+The initial non-admin profile identified two five-second restricted WMI connections. TPM Base Services now supply non-admin presence/version without inventing readiness; BitLocker explicitly retains AccessDenied. Collection work overlaps with a four-worker limit. Optional timing output is stderr-only. Console runs avoid unused endpoint inventory. Existing WUA offline behavior and its bounded search timeout are preserved.
+
+The review also added null checks to all WMI extraction helpers and bounded native CPU topology traversal to prevent a malformed size from causing a non-advancing or out-of-bounds loop. C++23 features were used where they improve ownership, error handling, or traversal; providers and hardware limitations remain explicit.
+
+### Validation and limits
+
+- CMake Release and Debug application/regression builds succeeded.
+- Release and Debug native regressions passed, including complete/unknown/partial scoring, local-policy thresholds, warning severity/order, privacy precedence using private volatile registry roots, hidden console inventories, antivirus fallback, registry parsing, WMI conversions/null objects, storage coverage, and hashing fixtures.
+- MSBuild Release `/analyze` completed without reported warnings.
+- AddressSanitizer Debug native regressions and live smoke checks passed, including JSON parsing, both hashing modes, invalid arguments/help, redirected console output, warning metadata, and all score sums.
+- A live pseudoconsole check confirmed ANSI colors, the final breakdown/score/warnings order, and absence of the removed console inventories.
+- Five Release non-admin JSON runs had a median of 0.802 seconds, versus a single profiled baseline of 10.994 seconds before the changes. Different provider cache states and machines can produce different results.
+- Live runs used a non-admin token. Elevated TPM/BitLocker provider collection was not exercised live; synthetic fixtures validate scoring for their results and for multiple antivirus products. No security settings were changed. This is broad regression/static/memory coverage, not proof that every possible Windows configuration is defect-free.
+
+Current weights and console behavior are described in README.md; earlier notes above describe their historical versions.

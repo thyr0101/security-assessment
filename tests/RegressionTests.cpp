@@ -3,6 +3,9 @@
 #include "Collectors/ApplicationCollector.h"
 #include "Collectors/AntivirusCollector.h"
 #include "Collectors/DefenderCollector.h"
+#include "Collectors/PrivacyCollector.h"
+#include <ranges>
+#include <algorithm>
 #include "Collectors/PersistenceCollector.h"
 #include "Output/JsonRenderer.h"
 #include "Output/ConsoleRenderer.h"
@@ -137,8 +140,8 @@ static void TestScoreAndJson() {
     s.secureBoot.enabled = Tri::Yes;
     s.secureBoot.status = Status::Success;
     s.virt.status = Status::Success;
-    s.virt.runningServicesKnown = s.virt.vbsEnabled = s.virt.hvciEnabled = true;
-    s.uac.status = Status::Success; s.uac.enabled = s.uac.consentPromptAdmin = true;
+    s.virt.runningServicesKnown = s.virt.vbsEnabled = s.virt.hvciEnabled = s.virt.credentialGuardRunning = true;
+    s.uac.status = Status::Success; s.uac.enabled = s.uac.consentPromptAdmin = true; s.uac.promptOnSecureDesktop = 1;
     s.dep.depEnabled = s.dep.sehopEnabled = Tri::Yes;
     s.smartAppControlOn = s.isElevated = s.windowsHelloAvailable = true;
     auto& d = result.defender;
@@ -167,6 +170,14 @@ static void TestScoreAndJson() {
     for (auto* setting : {&result.network.smbServerSigning, &result.network.smbClientSigning}) {
         setting->enabled = Tri::Yes; setting->status = Status::Success;
     }
+    auto& hardening = result.hardening;
+    for (auto* setting : {&hardening.lsaProtection, &hardening.noLmHash, &hardening.autoPlayDisabled,
+                          &hardening.guestDisabled, &hardening.remoteAssistanceDisabled}) {
+        setting->status = Status::Success; setting->enabled = Tri::Yes;
+    }
+    hardening.inactivityStatus = hardening.lmCompatibilityStatus = hardening.passwordStatus = hardening.lockoutStatus = Status::Success;
+    hardening.inactivitySeconds = 900; hardening.lmCompatibility = 5; hardening.minimumPasswordLength = 12;
+    hardening.lockoutThreshold = 10; hardening.lockoutDuration = hardening.lockoutWindow = 900;
     auto healthy = ComputeScore(result);
     Check(healthy.total == 1000 && healthy.maximum == 1000, "fully satisfied rules retain 1000-point scale");
     Check(Rule(healthy, "os.sac").awardedPoints == 50 && Rule(healthy, "os.sac").maxPoints == 50,
@@ -199,11 +210,11 @@ static void TestScoreAndJson() {
     int sum = 0; for (const auto& rule : healthy.rules) sum += rule.awardedPoints;
     Check(sum == healthy.total, "rule sum matches score");
     s.tpm.specVersion = L"1.2";
-    Check(Rule(ComputeScore(result), "hw.tpm2").awardedPoints == 20, "TPM 1.2 must not earn TPM 2.0 points");
+    Check(Rule(ComputeScore(result), "hw.tpm2").awardedPoints == 15, "TPM 1.2 must not earn TPM 2.0 points");
     s.tpm.specVersion = L"12.0";
-    Check(Rule(ComputeScore(result), "hw.tpm2").awardedPoints == 20, "TPM version matching must use the complete version");
+    Check(Rule(ComputeScore(result), "hw.tpm2").awardedPoints == 15, "TPM version matching must use the complete version");
     s.tpm.specVersion = L"2.0, 0, 1.59";
-    Check(Rule(ComputeScore(result), "hw.tpm2").awardedPoints == 50, "TPM 2.0 with revision metadata earns full credit");
+    Check(Rule(ComputeScore(result), "hw.tpm2").awardedPoints == 30, "TPM 2.0 with revision metadata earns full credit");
     result.firewall.profiles[0].defaultInbound = 2;
     Check(Rule(ComputeScore(result), "net.in").awardedPoints == 0, "unknown firewall action must not count as blocked");
     s.virt.runningServicesKnown = false;
@@ -224,8 +235,8 @@ static void TestWindowsUpdate() {
     result.windowsUpdate = HealthyWindowsUpdate();
     auto score = ComputeScore(result);
     Check(score.maximum == 1000, "Windows Update category preserves the 1000-point maximum");
-    Check(Rule(score, "os.patch").category == "Windows Update" && Rule(score, "os.patch").maxPoints == 30,
-          "update details move category while retaining their ID and 30-point weight");
+    Check(Rule(score, "os.patch").category == "Windows Update" && Rule(score, "os.patch").maxPoints == 0,
+          "update metadata retain their stable ID without earning security points");
     int categoryMax = 0, categoryAward = 0;
     for (const auto& rule : score.rules) if (rule.category == "Windows Update") {
         categoryMax += rule.maxPoints; categoryAward += rule.awardedPoints;
@@ -247,7 +258,7 @@ static void TestWindowsUpdate() {
           ComputeScore(result).total == baselineScore, "failed pending search stays unknown without changing score");
     result.windowsUpdate.pendingStatus = Status::Success;
     auto& service = result.windowsUpdate.services.entries[0];
-    Check(Rule(ComputeScore(result), "wu.service.wuauserv").awardedPoints == 5, "idle manual update service is available on demand");
+    Check(Rule(ComputeScore(result), "wu.service.wuauserv").awardedPoints == 10, "idle manual update service is available on demand");
     service.startType = L"Disabled";
     Check(Rule(ComputeScore(result), "wu.service.wuauserv").awardedPoints == 0, "disabled update service earns no readiness credit");
     service.startType = L"Manual"; service.status = Status::AccessDenied;
@@ -293,8 +304,8 @@ static void TestWindowsUpdate() {
     const size_t scoreStart = captured.str().find(L"Rule breakdown");
     const size_t updateGroup = captured.str().find(L"Windows Update", scoreStart);
     const size_t metadata = captured.str().find(L"Windows update details available", scoreStart);
-    Check(scoreStart != std::wstring::npos && updateGroup != std::wstring::npos && metadata > updateGroup,
-          "update details appear under Windows Update despite retaining the os.patch ID");
+    Check(scoreStart != std::wstring::npos && updateGroup != std::wstring::npos && metadata == std::wstring::npos,
+          "informational update metadata do not appear in the scored breakdown");
     result.windowsUpdate.updates.clear(); result.windowsUpdate.pendingCount = result.windowsUpdate.optionalCount = 0;
     captured.str(L""); captured.clear(); old = std::wcout.rdbuf(captured.rdbuf());
     try { RenderConsole(result); } catch (...) { std::wcout.rdbuf(old); throw; }
@@ -314,6 +325,13 @@ static void TestWindowsUpdate() {
 }
 
 static void TestComAndWmi() {
+    std::wstring missingString;
+    unsigned long long missingNumber = 0;
+    bool missingBool = false;
+    std::vector<unsigned long long> missingArray{1};
+    Check(!WmiGetString(nullptr, L"Probe", missingString) && !WmiGetUInt(nullptr, L"Probe", missingNumber) &&
+          !WmiGetBool(nullptr, L"Probe", missingBool) && !WmiGetUIntArray(nullptr, L"Probe", missingArray) && missingArray.empty(),
+          "missing WMI objects fail safely without dereferencing null");
     Check(SUCCEEDED(::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)), "initialize STA");
     struct ComGuard { ~ComGuard() { ::CoUninitialize(); } } outer;
     { ComInit nested; Check(nested.ok(), "existing STA supports COM helper"); }
@@ -386,15 +404,15 @@ static void TestPartialCollection() {
     Check(Rule(ComputeScore(result), "enc.bl").awardedPoints == 0 && Rule(ComputeScore(result), "enc.bl").state == "Unknown",
           "unreadable BitLocker status must not earn points from stale On state");
     result.storage.volumes[0].bitLockerStatus = Status::Success;
-    Check(Rule(ComputeScore(result), "enc.bl").awardedPoints == 100, "complete encrypted inventory receives full credit");
+    Check(Rule(ComputeScore(result), "enc.bl").awardedPoints == 50, "complete encrypted inventory receives full credit");
     result.storage.status = Status::AccessDenied;
-    Check(Rule(ComputeScore(result), "enc.bl").awardedPoints == 50, "partial volume enumeration cannot receive full credit");
+    Check(Rule(ComputeScore(result), "enc.bl").awardedPoints == 25, "partial volume enumeration cannot receive full credit");
     result.storage.volumes.clear();
     Check(Rule(ComputeScore(result), "enc.bl").state == "Unknown", "failed empty inventory does not mean no fixed volumes");
     result.storage.status = Status::Success;
     result.storage.volumes = {volume}; result.storage.volumes[0].bitLockerStatus = Status::Success;
     result.storage.volumes.push_back(StorageVolume{});
-    Check(Rule(ComputeScore(result), "enc.bl").awardedPoints == 50, "unknown volume type prevents full encryption coverage credit");
+    Check(Rule(ComputeScore(result), "enc.bl").awardedPoints == 25, "unknown volume type prevents full encryption coverage credit");
     result.security.secureBoot.enabled = Tri::Yes;
     Check(Rule(ComputeScore(result), "hw.secureboot").awardedPoints == 0, "failed Secure Boot read cannot earn stale credit");
     result.security.virt.runningServicesKnown = result.security.virt.hvciEnabled = true;
@@ -426,11 +444,11 @@ static void TestRegisteredAntivirus() {
     result.defender.amRunningMode = L"SxS Passive Mode";
     result.score = ComputeScore(result);
     Check(result.score.registeredAntivirusScoring, "third-party AV selects registration scoring");
-    Check(result.score.total == 195 && result.score.maximum == 1000, "enabled third-party AV earns malware section only");
-    Check(result.score.antivirusScores.size() == 3 && result.score.antivirusScores[0].awardedPoints == 195 &&
+    Check(result.score.total == 180 && result.score.maximum == 1000, "enabled third-party AV earns malware section only");
+    Check(result.score.antivirusScores.size() == 3 && result.score.antivirusScores[0].awardedPoints == 180 &&
           result.score.antivirusScores[1].awardedPoints == 0 && result.score.antivirusScores[2].awardedPoints == 0,
           "independent product scores when Defender is inactive");
-    Check(Rule(result.score, "mp.registered").awardedPoints == 195, "Defender WMI failure must not erase WSC credit");
+    Check(Rule(result.score, "mp.registered").awardedPoints == 180, "Defender WMI failure must not erase WSC credit");
     std::ofstream("antivirus-output.json", std::ios::binary) << RenderJson(result);
     std::wostringstream captured;
     auto* old = std::wcout.rdbuf(captured.rdbuf());
@@ -438,22 +456,22 @@ static void TestRegisteredAntivirus() {
     std::wcout.rdbuf(old);
     Check(captured.str().find(first.name) != std::wstring::npos && captured.str().find(second.name) != std::wstring::npos,
           "console names both third-party products");
-    Check(captured.str().find(L"195 / 195") != std::wstring::npos && captured.str().find(L"0 / 195") != std::wstring::npos,
+    Check(captured.str().find(L"180 / 180") != std::wstring::npos && captured.str().find(L"0 / 180") != std::wstring::npos,
           "console shows each antivirus score");
     Check(captured.str().find(L"Periodic scanning") != std::wstring::npos && captured.str().find(L"Real-Time") == std::wstring::npos,
           "fallback replaces inactive Defender detail and shows periodic scanning");
     for (Tri periodic : {Tri::No, Tri::Yes, Tri::Unknown}) {
         result.defender.periodicScanning = periodic;
-        Check(ComputeScore(result).total == 195, "periodic scanning must never affect score");
+        Check(ComputeScore(result).total == 180, "periodic scanning must never affect score");
     }
     result.antivirus.products[1].state = AntivirusState::Enabled;
     auto both = ComputeScore(result);
-    Check(both.total == 195 && both.antivirusScores[0].awardedPoints == 195 && both.antivirusScores[1].awardedPoints == 195,
+    Check(both.total == 180 && both.antivirusScores[0].awardedPoints == 180 && both.antivirusScores[1].awardedPoints == 180,
           "two enabled AVs score separately without inflating total");
     result.security.smartAppControlEvaluation = true;
     const auto evaluatedWithAv = ComputeScore(result);
-    Check(evaluatedWithAv.total == 220 && evaluatedWithAv.maximum == 1000 &&
-          Rule(evaluatedWithAv, "mp.registered").maxPoints == 195,
+    Check(evaluatedWithAv.total == 205 && evaluatedWithAv.maximum == 1000 &&
+          Rule(evaluatedWithAv, "mp.registered").maxPoints == 180,
           "registered antivirus and SAC evaluation preserve the 1000-point scale");
     result.security.smartAppControlEvaluation = false;
     result.antivirus.products[1].state = AntivirusState::Disabled;
@@ -466,7 +484,7 @@ static void TestRegisteredAntivirus() {
     Check(ComputeScore(result).total == 0, "unreadable enabled field cannot earn points");
     result.antivirus.products = {defender};
     result.antivirus.products[0].state = AntivirusState::Enabled;
-    Check(ComputeScore(result).total == 195, "registered Defender fallback works when its WMI provider is unavailable");
+    Check(ComputeScore(result).total == 180, "registered Defender fallback works when its WMI provider is unavailable");
     result.defender.status = Status::Success; result.defender.enabled = result.defender.installed = true;
     result.defender.enabledStatus = Status::Success;
     auto defenderOnly = ComputeScore(result);
@@ -479,6 +497,99 @@ static void TestRegisteredAntivirus() {
           "unrecognized periodic scanning state remains unknown");
 }
 
+static std::wstring CaptureConsole(const AssessmentResult& result) {
+    std::wostringstream captured;
+    auto* original = std::wcout.rdbuf(captured.rdbuf());
+    try { RenderConsole(result); } catch (...) { std::wcout.rdbuf(original); throw; }
+    std::wcout.rdbuf(original);
+    return captured.str();
+}
+static void TestHardeningAndWarnings() {
+    AssessmentResult result;
+    auto score = ComputeScore(result);
+    Check(score.maximum == 1000 && score.total == 0, "unknown expanded assessment earns zero on the 1000-point scale");
+    Check(std::ranges::all_of(score.warnings, [](const auto& warning) { return warning.verificationOnly && warning.severity == Severity::Low; }),
+          "missing data produce verification gaps rather than vulnerability claims");
+    auto& hardening = result.hardening;
+    hardening.passwordStatus = hardening.lockoutStatus = Status::Success;
+    hardening.minimumPasswordLength = 12;
+    hardening.lockoutThreshold = 10; hardening.lockoutDuration = hardening.lockoutWindow = 900;
+    Check(Rule(ComputeScore(result), "acc.password").awardedPoints == 20 && Rule(ComputeScore(result), "acc.lockout").awardedPoints == 20,
+          "verified local password and lockout policies earn their exact weights");
+    for (const auto minimum : {0u, 7u, 8u, 11u, 12u, 128u}) {
+        hardening.minimumPasswordLength = minimum;
+        Check(Rule(ComputeScore(result), "acc.password").awardedPoints == (minimum >= 12 ? 20 : minimum >= 8 ? 10 : 0),
+              "password length scoring covers threshold boundaries");
+    }
+    for (const auto attempts : {0u, 1u, 10u, 11u, MAXDWORD}) {
+        hardening.lockoutThreshold = attempts;
+        Check(Rule(ComputeScore(result), "acc.lockout").awardedPoints == (attempts >= 1 && attempts <= 10 ? 20 : 0),
+              "lockout attempt thresholds do not overflow or reward disabled lockout");
+    }
+    hardening.lockoutThreshold = 5; hardening.lockoutDuration = 899;
+    Check(Rule(ComputeScore(result), "acc.lockout").awardedPoints == 10, "short lockout receives partial credit");
+    hardening.lockoutDuration = MAXDWORD;
+    Check(Rule(ComputeScore(result), "acc.lockout").awardedPoints == 20, "administrator-only unlocking qualifies for lockout duration");
+    hardening.lsaProtection.enabled = Tri::Yes; hardening.lsaProtection.status = Status::AccessDenied;
+    Check(Rule(ComputeScore(result), "os.lsa").awardedPoints == 0, "unreadable LSA status cannot earn stale credit");
+    hardening.guestDisabled.status = Status::Success; hardening.guestDisabled.enabled = Tri::No;
+    result.defender.status = Status::Success; result.defender.installed = result.defender.threatsKnown = true;
+    result.defender.threatsCount = 1;
+    score = ComputeScore(result);
+    const auto critical = std::ranges::find(score.warnings, std::string("mp.threats"), &SecurityWarning::ruleId);
+    Check(critical != score.warnings.end() && critical->severity == Severity::Critical && !critical->verificationOnly,
+          "confirmed active threats generate a critical warning");
+    Check(std::ranges::is_sorted(score.warnings, std::greater{}, &SecurityWarning::severity), "warnings are sorted by severity");
+    result.security.tpm.status = Status::Success; result.security.tpm.present = true; result.security.tpm.specVersion = L"2.0";
+    const auto nativeTpm = ComputeScore(result);
+    Check(Rule(nativeTpm, "hw.tpm2").state == "Readiness unknown" && Rule(nativeTpm, "enc.tpm").awardedPoints == 40,
+          "native TPM presence does not invent verified readiness");
+    result.network.adapters.push_back(NetworkAdapterInfo{}); result.network.adapters.back().name = L"PRIVATE_ADAPTER_SENTINEL";
+    result.network.adapters.back().up = true;
+    result.score = ComputeScore(result);
+    const auto console = CaptureConsole(result);
+    Check(console.find(L"Rule breakdown") < console.find(L"SECURITY SCORE") && console.find(L"SECURITY SCORE") < console.find(L"-- Warnings"),
+          "report ends with breakdown, score, then warnings");
+    for (const auto* hidden : {L"Active Network Adapters", L"PRIVATE_ADAPTER_SENTINEL", L"Local TCP Listeners", L"UDP Port 69", L"Configured RDP port", L"RDP scope"})
+        Check(console.find(hidden) == std::wstring::npos, "removed console inventories stay hidden");
+    Check(console.find(L"Critical") != std::wstring::npos && console.find(L"verification gap") != std::wstring::npos,
+          "console distinguishes critical findings from unverified coverage");
+    std::ofstream("warnings-output.json", std::ios::binary) << RenderJson(result);
+}
+static void TestPrivacySources(Fixture& fixture) {
+    RegKey machine, user;
+    Check(::RegCreateKeyExW(fixture.key.get(), L"PrivacyMachine", 0, nullptr, REG_OPTION_VOLATILE, KEY_ALL_ACCESS, nullptr, machine.put(), nullptr) == ERROR_SUCCESS,
+          "create isolated machine privacy source");
+    Check(::RegCreateKeyExW(fixture.key.get(), L"PrivacyUser", 0, nullptr, REG_OPTION_VOLATILE, KEY_ALL_ACCESS, nullptr, user.put(), nullptr) == ERROR_SUCCESS,
+          "create isolated user privacy source");
+    auto set = [](HKEY root, const wchar_t* path, const wchar_t* name, DWORD value) {
+        RegKey key;
+        Check(::RegCreateKeyExW(root, path, 0, nullptr, REG_OPTION_VOLATILE, KEY_ALL_ACCESS, nullptr, key.put(), nullptr) == ERROR_SUCCESS,
+              "create private privacy setting");
+        Check(::RegSetValueExW(key.get(), name, 0, REG_DWORD, reinterpret_cast<const BYTE*>(&value), sizeof(value)) == ERROR_SUCCESS,
+              "write private privacy setting");
+    };
+    auto find = [](const std::vector<PrivacyFinding>& findings, const wchar_t* name) -> const PrivacyFinding& {
+        const auto item = std::ranges::find(findings, std::wstring(name), &PrivacyFinding::name);
+        Check(item != findings.end(), "privacy setting remains present"); return *item;
+    };
+    auto readings = CollectPrivacyFindings(machine.get(), user.get());
+    Check(find(readings, L"Advertising ID").status == Status::NotFound, "absent privacy settings stay not configured");
+    set(user.get(), LR"(SOFTWARE\Microsoft\Windows\CurrentVersion\AdvertisingInfo)", L"Enabled", 1);
+    set(machine.get(), LR"(SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo)", L"DisabledByGroupPolicy", 1);
+    readings = CollectPrivacyFindings(machine.get(), user.get());
+    Check(find(readings, L"Advertising ID").value == L"Disabled" && find(readings, L"Advertising ID").scope == L"Device policy",
+          "policy restriction overrides an enabled user advertising preference");
+    set(machine.get(), LR"(SOFTWARE\Policies\Microsoft\Windows\AppPrivacy)", L"LetAppsAccessCamera", 2);
+    set(machine.get(), LR"(SOFTWARE\Policies\Microsoft\Windows\DataCollection)", L"AllowTelemetry", 4);
+    readings = CollectPrivacyFindings(machine.get(), user.get());
+    Check(find(readings, L"Camera access").value == L"Deny", "camera policy default remains enforced");
+    Check(find(readings, L"Diagnostic data level").status == Status::Error, "invalid diagnostic levels do not become a valid default");
+    set(machine.get(), LR"(SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo)", L"DisabledByGroupPolicy", 7);
+    readings = CollectPrivacyFindings(machine.get(), user.get());
+    Check(find(readings, L"Advertising ID").status == Status::Error, "invalid restriction cannot silently fall back to a user preference");
+}
+
 int main() {
     try {
         Check(::SetEnvironmentVariableW(L"NO_COLOR", L"1") != FALSE, "use deterministic ASCII tree rendering in regressions");
@@ -489,6 +600,8 @@ int main() {
         TestRegisteredAntivirus();
         TestWindowsUpdate();
         TestPartialCollection();
+        TestHardeningAndWarnings();
+        TestPrivacySources(fixture);
         TestComAndWmi();
         std::cout << "All native regressions passed.\n";
         return 0;

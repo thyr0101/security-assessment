@@ -38,15 +38,15 @@ def main():
         assert evaluation_rules['mp.threats']['awardedPoints'] == 20 and evaluation_rules['mp.threats']['state'] == 'Clear'
         assert evaluation_rules['os.patch']['description'] == 'Windows update details available'
         assert evaluation_rules['os.patch']['state'] == 'Available'
-        assert sum(rule['maxPoints'] for rule in evaluation_rules.values() if rule['category'] == 'OS Security') == 145
+        assert sum(rule['maxPoints'] for rule in evaluation_rules.values() if rule['category'] == 'OS Security') == 200
         assert sum(rule['maxPoints'] for rule in evaluation_rules.values() if rule['category'] == 'Windows Update') == 60
-        assert sum(rule['maxPoints'] for rule in evaluation_rules.values() if rule['id'].startswith('mp.')) == 195
+        assert sum(rule['maxPoints'] for rule in evaluation_rules.values() if rule['id'].startswith('mp.')) == 180
         antivirus = json.loads((Path(scratch) / 'antivirus-output.json').read_text(encoding='utf-8'))
         assert antivirus['antivirus']['hasThirdParty'] is True
         assert antivirus['defender']['periodicScanning'] == 'Yes'
-        assert [p['awardedPoints'] for p in antivirus['score']['antivirusScores']] == [195, 0, 0]
+        assert [p['awardedPoints'] for p in antivirus['score']['antivirusScores']] == [180, 0, 0]
         assert antivirus['score']['antivirusScores'][0]['name'] == 'Example "Antivirus" A'
-        assert antivirus['score']['total'] == 195 and antivirus['score']['maximum'] == 1000
+        assert antivirus['score']['total'] == 180 and antivirus['score']['maximum'] == 1000
         partial = json.loads((Path(scratch) / 'partial-output.json').read_text(encoding='utf-8'))
         assert partial['defender']['cloudProtectionStatus'] == 'Success'
         assert partial['defender']['realTimeProtectionStatus'] == 'Unavailable'
@@ -82,8 +82,8 @@ def main():
     assert 'antivirus' in report and 'periodicScanning' in report['defender']
     assert len(report['antivirus']['products']) == len(report['score']['antivirusScores'])
     for product, score in zip(report['antivirus']['products'], report['score']['antivirusScores']):
-        assert score['maxPoints'] == 195
-        assert score['awardedPoints'] == (195 if product['status'] == 'Success' and product['state'] == 'Enabled' else 0)
+        assert score['maxPoints'] == 180
+        assert score['awardedPoints'] == (180 if product['status'] == 'Success' and product['state'] == 'Enabled' else 0)
     rules = {rule['id']: rule for rule in report['score']['rules']}
     assert rules['os.patch']['category'] == 'Windows Update'
     assert sum(rule['maxPoints'] for rule in rules.values() if rule['category'] == 'Windows Update') == 60
@@ -122,7 +122,16 @@ def main():
                 assert not loc['sha256'] or len(loc['sha256']) == 64
     console, _ = run(app, '--no-hash')
     assert 'SECURITY SCORE' in console and '\x1b[' not in console
-    assert 'Windows update details available' in console
+    assert 'Windows update details available' not in console
+    assert console.index('Rule breakdown') < console.index('SECURITY SCORE') < console.index('-- Warnings')
+    assert all(hidden not in console for hidden in ['Active Network Adapters', 'UDP Port 69', 'Configured RDP port', 'RDP scope', 'Local TCP Listeners'])
+    assert 'hardening' in report and 'warnings' in report['score']
+    ranks = {'Low': 1, 'Medium': 2, 'High': 3, 'Critical': 4}
+    warnings = report['score']['warnings']
+    assert [ranks[w['severity']] for w in warnings] == sorted([ranks[w['severity']] for w in warnings], reverse=True)
+    assert all(not w['verificationOnly'] or w['severity'] == 'Low' for w in warnings)
+    assert rules['enc.bl']['maxPoints'] == 50
+    assert sum(rule['maxPoints'] for rule in rules.values() if rule['category'] == 'Network Security') == 200
     assert 'Update Services' in console and 'Pending Updates' in console
     print(f"Smoke checks passed: JSON, hashes, help, redirected console; elevated={report['security']['elevated']}.")
     print(f"Elapsed: --no-hash {no_hash_time:.3f}s; hashing {hash_time:.3f}s (single runs, not a benchmark).")

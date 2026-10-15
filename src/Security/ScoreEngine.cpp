@@ -1,5 +1,8 @@
 #include "ScoreEngine.h"
 #include <algorithm>
+#include <ranges>
+#include <format>
+#include <string_view>
 
 namespace sa {
 
@@ -38,12 +41,91 @@ ScoreRuleResult Partial(const R& r, int pts, const std::string& state, const std
     s.state = state; s.reason = reason;
     return s;
 }
+struct WarningPolicy {
+    std::string_view id;
+    Severity severity;
+    std::string_view recommendation;
+};
+void BuildWarnings(const AssessmentResult& assessment, ScoreReport& report) {
+    constexpr WarningPolicy policies[] = {
+        {"mp.threats", Severity::Critical, "Open Windows Security and review/remediate the reported active threats."},
+        {"mp.registered", Severity::Critical, "Enable a trusted antivirus and verify its state in Windows Security."},
+        {"mp.defender", Severity::Critical, "Verify that a trusted antivirus is actively protecting the device."},
+        {"mp.rtp", Severity::High, "Enable real-time antivirus protection."},
+        {"mp.tamper", Severity::High, "Enable tamper protection in Windows Security when supported."},
+        {"net.fw", Severity::High, "Enable the firewall for every network profile."},
+        {"net.in", Severity::High, "Use default inbound blocking and narrowly scoped allow rules."},
+        {"net.svc", Severity::High, "Restore the Windows Firewall service and verify firewall operation."},
+        {"net.smb1.server", Severity::High, "Disable the legacy SMB1 server after checking file-sharing compatibility."},
+        {"net.smb1.client", Severity::High, "Remove or disable the legacy SMB1 client when no longer needed."},
+        {"net.smb.sign.server", Severity::High, "Require signing for incoming SMB connections after checking compatibility."},
+        {"net.smb.sign.client", Severity::High, "Require signing for outgoing SMB connections after checking compatibility."},
+        {"net.smb.guest", Severity::High, "Use authenticated SMB access and block insecure guest logons."},
+        {"net.rdp", Severity::High, "Require Network Level Authentication for RDP, or disable RDP when unused."},
+        {"net.ntlm", Severity::High, "Review LAN Manager authentication policy and require NTLMv2-only responses where compatible."},
+        {"enc.bl", Severity::High, "Review unprotected fixed volumes and enable BitLocker where appropriate; retain recovery keys."},
+        {"os.uac", Severity::High, "Enable User Account Control."},
+        {"os.lsa", Severity::High, "Enable supported LSA protection and confirm LSASS runs as a protected process."},
+        {"os.lmhash", Severity::High, "Block LM hash storage; existing account passwords must change before this policy removes old LM hashes."},
+        {"acc.guest", Severity::High, "Disable the built-in Guest account if it is not explicitly required."},
+        {"acc.password", Severity::Medium, "Review the local account policy and require passwords of at least 12 characters."},
+        {"acc.lockout", Severity::Medium, "Use a local account lockout threshold of 1-10 attempts with lockout/reset windows of at least 15 minutes."},
+        {"acc.securedesktop", Severity::Medium, "Require UAC prompts on the secure desktop."},
+        {"acc.assistance", Severity::Low, "Block solicited Remote Assistance invitations when the feature is unused."},
+        {"os.autolock", Severity::Medium, "Review device and user locking policies; configure an inactivity limit of 15 minutes or less."},
+        {"os.autoplay", Severity::Low, "Disable AutoPlay for all drive types through device policy."},
+        {"hw.credentialguard", Severity::Medium, "Enable Credential Guard when supported by the Windows edition and hardware."},
+        {"hw.hvci", Severity::Medium, "Enable Memory integrity if drivers and hardware support it."},
+        {"os.sac", Severity::Medium, "Review Smart App Control in Windows Security; evaluation mode does not block apps."},
+        {"wu.restart", Severity::Medium, "Restart Windows to finish applying updates."},
+        {"wu.history", Severity::Medium, "Review Windows Update installation history and resolve the latest recorded failure."}
+    };
+    std::vector<std::string> unverified;
+    for (const auto& rule : report.rules) {
+        if (!rule.maxPoints || rule.awardedPoints >= rule.maxPoints) continue;
+        const auto state = ToLower(Utf8ToWide(rule.state));
+        bool verification = state.find(L"unknown") != std::wstring::npos || state == L"unavailable" ||
+            state == L"version unverified" || state == L"dhcp controlled" || state == L"no fixed drives" ||
+            (state == L"not configured" && rule.id != "acc.lockout" && rule.id != "os.autolock");
+        if (rule.id == "net.fw" && !std::ranges::any_of(assessment.firewall.profiles,
+            [](const auto& profile) { return profile.status == Status::Success && !profile.enabled; })) verification = true;
+        if (rule.id == "enc.bl" && !std::ranges::any_of(assessment.storage.volumes,
+            [](const auto& volume) { return volume.driveType == L"Fixed" && volume.bitLockerStatus == Status::Success && volume.bitLockerState == L"Off"; })) verification = true;
+        if (verification) { unverified.push_back(rule.description + " [" + rule.state + "]"); continue; }
+        const auto policy = std::ranges::find(policies, rule.id, &WarningPolicy::id);
+        SecurityWarning warning;
+        warning.ruleId = rule.id;
+        warning.title = rule.description;
+        warning.detail = std::format("{}: {}", rule.state, rule.reason);
+        warning.severity = policy == std::end(policies) ? Severity::Medium : policy->severity;
+        warning.recommendation = policy == std::end(policies)
+            ? "Review this setting in Windows Security or the applicable device policy."
+            : std::string(policy->recommendation);
+        report.warnings.push_back(std::move(warning));
+    }
+    if (!unverified.empty()) {
+        SecurityWarning coverage;
+        coverage.ruleId = "assessment.coverage";
+        coverage.severity = Severity::Low;
+        coverage.title = "Some security checks could not be verified";
+        coverage.verificationOnly = true;
+        for (const auto& check : unverified) {
+            if (!coverage.detail.empty()) coverage.detail += "; ";
+            coverage.detail += check;
+        }
+        coverage.recommendation = assessment.security.isElevated
+            ? "Review missing policies, provider support, and access permissions. Unverified checks are not confirmed vulnerabilities."
+            : "Run as administrator to verify restricted checks. Missing policies or unsupported features can remain unknown; they are not confirmed vulnerabilities.";
+        report.warnings.push_back(std::move(coverage));
+    }
+    std::ranges::stable_sort(report.warnings, std::greater{}, &SecurityWarning::severity);
+}
 } // namespace
 
 ScoreReport ComputeScore(const AssessmentResult& a) {
     ScoreReport rep;
     rep.maximum = 1000;
-    rep.rules.reserve(32 + a.privacyFindings.size());
+    rep.rules.reserve(64 + a.privacyFindings.size());
 
     auto& S = a.security;
     auto& D = a.defender;
@@ -51,26 +133,26 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
     auto& O = a.os;
     auto& C = a.cpu;
 
-    // ---- Hardware Security (max 180) ----
+    // ---- Hardware Security (max 150) ----
     rep.rules.push_back(S.secureBoot.enabled == Tri::Yes
-        ? Full({ "hw.secureboot", "Secure Boot", 50, Category::HardwareSecurity },
+        ? Full({ "hw.secureboot", "Secure Boot", 40, Category::HardwareSecurity },
                "Secure Boot is enabled and UEFI is the firmware.")
-        : Zero({ "hw.secureboot", "Secure Boot", 50, Category::HardwareSecurity },
+        : Zero({ "hw.secureboot", "Secure Boot", 40, Category::HardwareSecurity },
                S.secureBoot.enabled == Tri::No ? "Disabled" : "Unknown",
                "Secure Boot is not enabled or could not be verified."));
 
     if (S.tpm.present && S.tpm.ready) {
         const bool v2 = Trim(Split(S.tpm.specVersion, L',').front()) == L"2.0";
         rep.rules.push_back(v2
-            ? Full({ "hw.tpm2", "TPM 2.0 security chip ready", 50, Category::HardwareSecurity }, "TPM 2.0 is present and ready.", "Ready")
-            : Partial({ "hw.tpm2", "TPM 2.0 security chip ready", 50, Category::HardwareSecurity }, 20,
+            ? Full({ "hw.tpm2", "TPM 2.0 security chip ready", 30, Category::HardwareSecurity }, "TPM 2.0 is present and ready.", "Ready")
+            : Partial({ "hw.tpm2", "TPM 2.0 security chip ready", 30, Category::HardwareSecurity }, 15,
                       "Version unverified", "TPM is ready, but version 2.0 could not be confirmed."));
     } else if (S.tpm.present) {
-        rep.rules.push_back(Partial({ "hw.tpm2", "TPM 2.0 security chip ready", 50, Category::HardwareSecurity },
-                                    20, "Not ready",
-                                    "TPM is present but not enabled/ready."));
+        rep.rules.push_back(Partial({ "hw.tpm2", "TPM 2.0 security chip ready", 30, Category::HardwareSecurity },
+                                    15, S.tpm.readinessKnown ? "Not ready" : "Readiness unknown",
+                                    "TPM presence is confirmed; readiness is not confirmed."));
     } else {
-        rep.rules.push_back(Zero({ "hw.tpm2", "TPM 2.0 security chip ready", 50, Category::HardwareSecurity },
+        rep.rules.push_back(Zero({ "hw.tpm2", "TPM 2.0 security chip ready", 30, Category::HardwareSecurity },
                                  S.tpm.status == Status::Unavailable ? "Unavailable" : "Absent",
                                  "No usable TPM detected."));
     }
@@ -92,32 +174,32 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
         : Zero({ "hw.nx", "CPU memory protection (NX/XD)", 0, Category::HardwareSecurity }, "Absent", "NX/XD not reported."));
 
     if (S.virt.vbsEnabled)
-        rep.rules.push_back(Full({ "hw.vbs", "Virtualization security (VBS)", 40, Category::HardwareSecurity },
+        rep.rules.push_back(Full({ "hw.vbs", "Virtualization security (VBS)", 30, Category::HardwareSecurity },
                                  "Windows uses virtualization to isolate security functions.", "Running"));
     else
-        rep.rules.push_back(Zero({ "hw.vbs", "Virtualization security (VBS)", 40, Category::HardwareSecurity },
+        rep.rules.push_back(Zero({ "hw.vbs", "Virtualization security (VBS)", 30, Category::HardwareSecurity },
                                  S.virt.deviceGuardAvailable ? "Not running" : "Unknown",
                                  "VBS not detected as running."));
 
     if (S.virt.hvciEnabled)
-        rep.rules.push_back(Full({ "hw.hvci", "Memory integrity (HVCI)", 40, Category::HardwareSecurity },
+        rep.rules.push_back(Full({ "hw.hvci", "Memory integrity (HVCI)", 30, Category::HardwareSecurity },
                                  "Memory integrity protects Windows kernel code using virtualization.", "Running"));
     else
-        rep.rules.push_back(Zero({ "hw.hvci", "Memory integrity (HVCI)", 40, Category::HardwareSecurity }, "Disabled",
+        rep.rules.push_back(Zero({ "hw.hvci", "Memory integrity (HVCI)", 30, Category::HardwareSecurity }, "Disabled",
                                  "HVCI is not enabled."));
 
-    // ---- OS Security (max 145) ----
+    // ---- OS Security (max 200) ----
     rep.rules.push_back(O.build >= 22000
-        ? Full({ "os.win11", "Windows 11 or newer", 30, Category::OsSecurity },
+        ? Full({ "os.win11", "Windows 11 or newer", 10, Category::OsSecurity },
                "The installed operating system is Windows 11 or newer.", "Detected")
-        : Partial({ "os.win11", "Windows 11 or newer", 30, Category::OsSecurity }, 10,
+        : Partial({ "os.win11", "Windows 11 or newer", 10, Category::OsSecurity }, 0,
                   "Older Windows", "The installed Windows version is older than Windows 11."));
 
     if (S.uac.enabled)
-        rep.rules.push_back(Full({ "os.uac", "User Account Control (UAC)", 30, Category::OsSecurity },
+        rep.rules.push_back(Full({ "os.uac", "User Account Control (UAC)", 20, Category::OsSecurity },
                                  "User Account Control is enabled."));
     else
-        rep.rules.push_back(Zero({ "os.uac", "User Account Control (UAC)", 30, Category::OsSecurity }, "Disabled",
+        rep.rules.push_back(Zero({ "os.uac", "User Account Control (UAC)", 20, Category::OsSecurity }, "Disabled",
                                  "UAC is disabled."));
 
     if (S.dep.depEnabled == Tri::Yes)
@@ -150,9 +232,9 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
     // ---- Windows Update (max 60; pending updates are informational) ----
     // Preserve the existing rule ID while moving it to the new category.
     rep.rules.push_back(O.ubr > 0
-        ? Full({ "os.patch", "Windows update details available", 30, Category::WindowsUpdate },
+        ? Full({ "os.patch", "Windows update details available", 0, Category::WindowsUpdate },
                "Windows reported its installed update revision. This does not verify that the latest updates are installed.", "Available")
-        : Zero({ "os.patch", "Windows update details available", 30, Category::WindowsUpdate }, "Unknown",
+        : Zero({ "os.patch", "Windows update details available", 0, Category::WindowsUpdate }, "Unknown",
                "Windows update revision could not be read."));
 
     const auto& U = a.windowsUpdate;
@@ -171,7 +253,7 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
         const auto found = std::find_if(U.services.entries.begin(), U.services.entries.end(),
             [&](const ServiceEntry& service) { return IEquals(service.name, name); });
         const std::string id = "wu.service." + WideToUtf8(name);
-        const R rule{id.c_str(), label, 5, Category::WindowsUpdate};
+        const R rule{id.c_str(), label, 10, Category::WindowsUpdate};
         if (found == U.services.entries.end() || found->status != Status::Success)
             rep.rules.push_back(Zero(rule, found != U.services.entries.end() && found->status == Status::NotFound
                 ? "Missing" : "Unknown", "The update service's state and configuration could not be verified."));
@@ -185,18 +267,18 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
                 found->state == L"Running" ? "Running" : "Available on demand"));
         else rep.rules.push_back(Zero(rule, "Unknown", "The update service configuration could not be interpreted."));
     }
-    const R restart{"wu.restart", "Update restart completed", 10, Category::WindowsUpdate};
+    const R restart{"wu.restart", "Update restart completed", 15, Category::WindowsUpdate};
     rep.rules.push_back(U.rebootRequired == Tri::No
         ? Full(restart, "Windows Update does not require a restart.", "Complete")
         : Zero(restart, U.rebootRequired == Tri::Yes ? "Restart required" : "Unknown",
             U.rebootRequired == Tri::Yes ? "Restart Windows to finish applying updates." : "Update restart status could not be read."));
-    const R history{"wu.history", "Latest update installation", 5, Category::WindowsUpdate};
+    const R history{"wu.history", "Latest update installation", 15, Category::WindowsUpdate};
     rep.rules.push_back(U.historyStatus == Status::Success && U.lastInstallationSucceeded == Tri::Yes
         ? Full(history, "The latest recorded update installation succeeded.", "Succeeded")
         : Zero(history, U.historyStatus == Status::Success && U.lastInstallationSucceeded == Tri::No
             ? "Needs attention" : "Unknown", "The latest installation failed, was incomplete, or its result could not be verified."));
 
-    // ---- Malware Protection (max 195) ----
+    // ---- Malware Protection (max 180) ----
     bool anyAvEnabled = false, anyAvUnknown = false;
     for (size_t i = 0; i < a.antivirus.products.size(); ++i) {
         const auto& av = a.antivirus.products[i];
@@ -235,10 +317,10 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
                                      "Defender could not be confirmed active."));
 
         if (D.realTimeProtection)
-            rep.rules.push_back(Full({ "mp.rtp", "Real-time protection", 60, Category::MalwareProtection },
+            rep.rules.push_back(Full({ "mp.rtp", "Real-time protection", 45, Category::MalwareProtection },
                                      "Real-time protection is enabled."));
         else
-            rep.rules.push_back(Zero({ "mp.rtp", "Real-time protection", 60, Category::MalwareProtection }, "Disabled",
+            rep.rules.push_back(Zero({ "mp.rtp", "Real-time protection", 45, Category::MalwareProtection }, "Disabled",
                                      "Real-time protection is off."));
 
         if (D.behaviorMonitor)
@@ -280,7 +362,7 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
                                          : "Threat status could not be read."));
     }
 
-    // ---- Network Security (max 180) ----
+    // ---- Network Security (max 200) ----
     bool anyEnabled = false, allEnabled = F.profiles.size() == 3;
     for (auto& p : F.profiles) {
         anyEnabled |= p.enabled && p.status == Status::Success;
@@ -363,7 +445,7 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
         : Zero(rdp, rdpKnown && nlaKnown ? "NLA not required" : "Unknown",
             "Enabled Remote Desktop must require Network Level Authentication to receive these points."));
 
-    // ---- Encryption (max 160) ----
+    // ---- Encryption (max 90) ----
     bool anyBitlockerOn = false, allFixedOn = a.storage.status == Status::Success;
     bool anyBitlockerUnknown = a.storage.status != Status::Success;
     int fixedCount = 0;
@@ -380,55 +462,108 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
         if (!known || (v.bitLockerState != L"On" && v.bitLockerState != L"Off")) anyBitlockerUnknown = true;
     }
     if (fixedCount == 0)
-        rep.rules.push_back(Zero({ "enc.bl", "BitLocker on all fixed drives", 100,
+        rep.rules.push_back(Zero({ "enc.bl", "BitLocker on all fixed drives", 50,
                                    Category::Encryption }, anyBitlockerUnknown ? "Unknown" : "No fixed drives",
                                  "No fixed volumes could be verified."));
     else if (allFixedOn)
-        rep.rules.push_back(Full({ "enc.bl", "BitLocker on all fixed drives", 100,
+        rep.rules.push_back(Full({ "enc.bl", "BitLocker on all fixed drives", 50,
                                    Category::Encryption },
                                  "All detected fixed drives have BitLocker protection active.", "Protected"));
     else if (anyBitlockerOn)
-        rep.rules.push_back(Partial({ "enc.bl", "BitLocker on all fixed drives", 100, Category::Encryption },
-                                    50, "Some drives protected",
+        rep.rules.push_back(Partial({ "enc.bl", "BitLocker on all fixed drives", 50, Category::Encryption },
+                                    25, "Some drives protected",
                                     "BitLocker protection confirmed on some volumes; full coverage could not be verified."));
     else
-        rep.rules.push_back(Zero({ "enc.bl", "BitLocker on all fixed drives", 100, Category::Encryption },
+        rep.rules.push_back(Zero({ "enc.bl", "BitLocker on all fixed drives", 50, Category::Encryption },
                                  anyBitlockerUnknown ? "Unknown" : "Disabled",
                                  anyBitlockerUnknown
                                      ? "BitLocker status could not be read (needs elevation)."
                                      : "BitLocker not enabled on any fixed volume."));
 
     rep.rules.push_back(S.tpm.present
-        ? Full({ "enc.tpm", "TPM available to protect keys", 60, Category::Encryption },
+        ? Full({ "enc.tpm", "TPM available to protect keys", 40, Category::Encryption },
                "A TPM security chip is available to store and protect encryption keys.", "Available")
-        : Zero({ "enc.tpm", "TPM available to protect keys", 60, Category::Encryption }, "Absent",
+        : Zero({ "enc.tpm", "TPM available to protect keys", 40, Category::Encryption }, "Absent",
                "No TPM available for key protection."));
 
-    // ---- Account Security (max 80) ----
+    // ---- Account Security (max 120) ----
     if (S.uac.enabled && S.uac.consentPromptAdmin)
-        rep.rules.push_back(Full({ "acc.uac2", "Admin actions require a UAC prompt", 50,
+        rep.rules.push_back(Full({ "acc.uac2", "Admin actions require a UAC prompt", 20,
                                    Category::AccountSecurity },
                                  "Administrator actions require a UAC consent or credentials prompt.", "Required"));
     else
-        rep.rules.push_back(Zero({ "acc.uac2", "Admin actions require a UAC prompt", 50, Category::AccountSecurity },
+        rep.rules.push_back(Zero({ "acc.uac2", "Admin actions require a UAC prompt", 20, Category::AccountSecurity },
                                  "Not required",
                                  "UAC prompt not required for admin actions."));
 
     rep.rules.push_back(S.isElevated
-        ? Full({ "acc.elev", "Assessment has administrator access", 5,
+        ? Full({ "acc.elev", "Assessment has administrator access", 0,
                  Category::AccountSecurity },
                "The assessment is running with administrator access to read restricted system information.", "Granted")
-        : Partial({ "acc.elev", "Assessment has administrator access", 5, Category::AccountSecurity }, 0,
+        : Partial({ "acc.elev", "Assessment has administrator access", 0, Category::AccountSecurity }, 0,
                   "Not granted",
                   "Run as administrator to allow restricted system checks."));
 
     if (S.windowsHelloAvailable)
-        rep.rules.push_back(Full({ "acc.hello", "Windows Hello sign-in support", 25,
+        rep.rules.push_back(Full({ "acc.hello", "Windows Hello sign-in support", 0,
                                    Category::AccountSecurity },
                                  "Windows Hello sign-in components were detected.", "Available"));
     else
-        rep.rules.push_back(Zero({ "acc.hello", "Windows Hello sign-in support", 25, Category::AccountSecurity }, "Unknown",
+        rep.rules.push_back(Zero({ "acc.hello", "Windows Hello sign-in support", 0, Category::AccountSecurity }, "Unknown",
                                  "Windows Hello availability not detected."));
+
+    const auto& H = a.hardening;
+    auto protection = [&](const char* id, const char* label, int points, Category category,
+                          const SecuritySetting& value, const char* success, const char* failure,
+                          const char* reason) {
+        const R rule{id, label, points, category};
+        const bool known = value.status == Status::Success && (value.enabled == Tri::Yes || value.enabled == Tri::No);
+        rep.rules.push_back(known && value.enabled == Tri::Yes ? Full(rule, reason, success)
+            : Zero(rule, known ? failure : value.status == Status::NotFound ? "Not configured" : "Unknown", reason));
+    };
+    SecuritySetting guard;
+    guard.status = S.virt.status == Status::Success && S.virt.runningServicesKnown ? Status::Success : Status::Unavailable;
+    if (guard.status == Status::Success) guard.enabled = S.virt.credentialGuardRunning ? Tri::Yes : Tri::No;
+    protection("hw.credentialguard", "Credential Guard", 20, Category::HardwareSecurity, guard,
+        "Running", "Not running", "Credential Guard isolates sign-in secrets using virtualization.");
+    protection("os.lsa", "LSA process protection", 25, Category::OsSecurity, H.lsaProtection,
+        "Protected", "Unprotected", "Reports the running LSASS process protection level, not merely a registry configuration.");
+    protection("os.lmhash", "Legacy LM hash storage blocked", 20, Category::OsSecurity, H.noLmHash,
+        "Blocked", "Allowed", "NoLMHash prevents LM hashes being stored at the next password change; it does not prove older hashes were removed.");
+    protection("os.autoplay", "AutoPlay off on all drive types", 20, Category::OsSecurity, H.autoPlayDisabled,
+        "Blocked", "Not blocked", "The device AutoPlay policy must cover all drive types.");
+    const R lock{"os.autolock", "Automatic device lock within 15 minutes", 20, Category::OsSecurity};
+    rep.rules.push_back(H.inactivityStatus == Status::Success && H.inactivitySeconds > 0 && H.inactivitySeconds <= 900
+        ? Full(lock, "An explicit device inactivity policy locks sessions within 15 minutes.", "Configured")
+        : Zero(lock, H.inactivityStatus == Status::Success ? (H.inactivitySeconds ? "Long timeout" : "Not configured") : "Unknown",
+            "Checks the device inactivity policy; user screen-saver policies can impose additional locking."));
+    const R ntlm{"net.ntlm", "NTLMv2-only logon policy", 20, Category::NetworkSecurity};
+    rep.rules.push_back(H.lmCompatibilityStatus == Status::Success && H.lmCompatibility >= 3 && H.lmCompatibility <= 5
+        ? Full(ntlm, "The configured LAN Manager level sends NTLMv2 responses only; higher levels further restrict acceptance on domain controllers.", "NTLMv2 only")
+        : Zero(ntlm, H.lmCompatibilityStatus == Status::Success ? "Legacy allowed" : "Unknown",
+            "Checks an explicit LAN Manager authentication level; an absent value does not prove legacy authentication is active."));
+    SecuritySetting desktop;
+    desktop.status = S.uac.status;
+    if (desktop.status == Status::Success && S.uac.promptOnSecureDesktop <= 1)
+        desktop.enabled = S.uac.enabled && S.uac.promptOnSecureDesktop == 1 ? Tri::Yes : Tri::No;
+    protection("acc.securedesktop", "UAC prompts use the secure desktop", 20, Category::AccountSecurity, desktop,
+        "Required", "Not required", "UAC prompts should run on the isolated secure desktop.");
+    protection("acc.guest", "Built-in Guest account disabled", 25, Category::AccountSecurity, H.guestDisabled,
+        "Disabled", "Enabled", "Identifies the built-in Guest account by RID 501, even if it was renamed.");
+    protection("acc.assistance", "Remote Assistance invitations blocked", 15, Category::AccountSecurity, H.remoteAssistanceDisabled,
+        "Blocked", "Allowed", "Checks policy/local permission for solicited Remote Assistance invitations, not third-party remote support tools.");
+    const R password{"acc.password", "Local account minimum password length", 20, Category::AccountSecurity};
+    rep.rules.push_back(H.passwordStatus != Status::Success ? Zero(password, "Unknown", "Local SAM password policy could not be read.")
+        : H.minimumPasswordLength >= 12 ? Full(password, "The local account policy requires at least 12 characters; domain and Microsoft accounts can use different policies.", "12+ characters")
+        : H.minimumPasswordLength >= 8 ? Partial(password, 10, "8-11 characters", "The local password minimum is below 12 characters.")
+        : Zero(password, "Below 8 characters", "The local account password minimum is below 8 characters."));
+    const R lockout{"acc.lockout", "Local account lockout protection", 20, Category::AccountSecurity};
+    const bool threshold = H.lockoutThreshold > 0 && H.lockoutThreshold <= 10;
+    const bool duration = H.lockoutDuration >= 900 && H.lockoutWindow >= 900;
+    rep.rules.push_back(H.lockoutStatus != Status::Success ? Zero(lockout, "Unknown", "Local SAM lockout policy could not be read.")
+        : threshold && duration ? Full(lockout, "Local accounts lock after 1-10 failed attempts, with a lockout and reset window of at least 15 minutes.", "Configured")
+        : threshold ? Partial(lockout, 10, "Short lockout", "The local lockout duration or reset window is shorter than 15 minutes.")
+        : Zero(lockout, H.lockoutThreshold ? "High threshold" : "Not configured", "The local account lockout threshold is absent or exceeds 10 failed attempts."));
 
     // ---- Privacy (informational; no score weight) ----
     for (auto& p : a.privacyFindings) {
@@ -477,6 +612,7 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
         else if (rule.id == "hw.secureboot") unknown = S.secureBoot.status != Status::Success;
         else if (rule.id == "os.dep") unknown = S.dep.depEnabled == Tri::Unknown;
         else if (rule.id == "net.fw") unknown = F.status != Status::Success && !anyEnabled;
+        else if (rule.id == "net.in") unknown = F.status != Status::Success;
         else if (rule.id == "net.svc") unknown = F.serviceStatus != Status::Success;
         if (rule.id == "mp.defender") unknown |= D.enabledStatus != Status::Success;
         else if (rule.id == "mp.rtp") unknown |= D.realTimeProtectionStatus != Status::Success;
@@ -499,6 +635,7 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
     }
     rep.total = total;
     rep.maximum = maximum;
+    BuildWarnings(a, rep);
     return rep;
 }
 

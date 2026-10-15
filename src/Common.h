@@ -7,7 +7,7 @@
 
 namespace sa {
 
-inline constexpr int kMalwareProtectionMaxPoints = 195;
+inline constexpr int kMalwareProtectionMaxPoints = 180;
 
 enum class Status {
     Success, NotFound, AccessDenied, Unsupported, Unavailable, Error

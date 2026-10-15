@@ -81,6 +81,7 @@ struct TpmInfo {
     bool activated = false;
     bool owned = false;
     bool ready = false;
+    bool readinessKnown = false;
     std::wstring specVersion;
     std::wstring manufacturerId;
     std::wstring manufacturerVersion;
@@ -277,12 +278,14 @@ struct NetworkAdapterInfo {
     Status netbiosStatus = Status::Unavailable;
 };
 
-struct NetworkSetting {
+struct SecuritySetting {
     Tri enabled = Tri::Unknown;
     Status status = Status::Unavailable;
     std::wstring source;
     std::wstring reason;
 };
+
+using NetworkSetting = SecuritySetting;
 
 struct NetworkEndpoint {
     std::wstring protocol; // TCP or UDP
@@ -308,6 +311,18 @@ struct NetworkInfo {
     std::vector<NetworkEndpoint> endpoints; // All TCP listeners, plus UDP port 69.
     Status tcp4Status = Status::Unavailable, tcp6Status = Status::Unavailable;
     Status udp4Status = Status::Unavailable, udp6Status = Status::Unavailable;
+};
+
+struct HardeningInfo {
+    SecuritySetting lsaProtection, noLmHash, autoPlayDisabled, guestDisabled, remoteAssistanceDisabled;
+    DWORD inactivitySeconds = 0;
+    Status inactivityStatus = Status::Unavailable;
+    DWORD lmCompatibility = 0;
+    Status lmCompatibilityStatus = Status::Unavailable;
+    DWORD minimumPasswordLength = 0;
+    Status passwordStatus = Status::Unavailable;
+    DWORD lockoutThreshold = 0, lockoutDuration = 0, lockoutWindow = 0;
+    Status lockoutStatus = Status::Unavailable;
 };
 
 struct ServiceEntry {
@@ -447,10 +462,20 @@ struct ScoreRuleResult {
     std::string state;   // Enabled/Disabled/Unknown/etc.
 };
 
+struct SecurityWarning {
+    std::string ruleId;
+    Severity severity = Severity::Low;
+    std::string title;
+    std::string detail;
+    std::string recommendation;
+    bool verificationOnly = false;
+};
+
 struct ScoreReport {
     int total = 0;
     int maximum = 1000;
     std::vector<ScoreRuleResult> rules;
+    std::vector<SecurityWarning> warnings;
     // Independent product scores, excluded from the overall sum.
     std::vector<ScoreRuleResult> antivirusScores;
     bool registeredAntivirusScoring = false;
@@ -466,6 +491,7 @@ struct AssessmentResult {
     FirewallInfo firewall;
     StorageInfo storage;
     NetworkInfo network;
+    HardeningInfo hardening;
     ServiceReport services;
     WindowsUpdateInfo windowsUpdate;
     std::vector<ApplicationFinding> applications;

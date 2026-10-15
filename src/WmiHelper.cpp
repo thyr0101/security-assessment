@@ -123,6 +123,7 @@ namespace sa {
     }
 
     bool WmiGetString(IWbemClassObject* o, const wchar_t* name, std::wstring& out) {
+        if (!o || !name) return false;
         _variant_t v;
         if (FAILED(o->Get(name, 0, &v, nullptr, nullptr))) return false;
         bool ok = false;
@@ -164,6 +165,7 @@ namespace sa {
     }
 
     bool WmiGetUInt(IWbemClassObject* o, const wchar_t* name, unsigned long long& out) {
+        if (!o || !name) return false;
         _variant_t v;
         CIMTYPE type = 0;
         return SUCCEEDED(o->Get(name, 0, &v, &type, nullptr)) && VariantUInt(v, type, out);
@@ -172,6 +174,7 @@ namespace sa {
     bool WmiGetUIntArray(IWbemClassObject* o, const wchar_t* name,
                          std::vector<unsigned long long>& out) {
         out.clear();
+        if (!o || !name) return false;
         _variant_t v;
         CIMTYPE type = 0;
         if (FAILED(o->Get(name, 0, &v, &type, nullptr))) return false;
@@ -206,6 +209,7 @@ namespace sa {
     }
 
     bool WmiGetBool(IWbemClassObject* o, const wchar_t* name, bool& out) {
+        if (!o || !name) return false;
         _variant_t v;
         if (FAILED(o->Get(name, 0, &v, nullptr, nullptr))) return false;
         bool ok = false;

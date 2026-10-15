@@ -35,6 +35,11 @@ static std::string TriS(Tri t) {
                  case Tri::NotApplicable: return "\"N/A\""; default: return "\"Unknown\""; }
 }
 static std::string StatusS(Status s) { return "\"" + std::string(WideToUtf8(ToW(s))) + "\""; }
+static std::string SettingJson(const SecuritySetting& setting) {
+    return "{\"enabled\":" + TriS(setting.enabled) + ",\"status\":" + StatusS(setting.status) +
+        ",\"source\":" + Q(setting.source) + ",\"reason\":" + Q(setting.reason) + "}";
+}
+
 
 std::string RenderJson(const AssessmentResult& r) {
     std::ostringstream o;
@@ -142,6 +147,7 @@ std::string RenderJson(const AssessmentResult& r) {
       <<   "\"present\":" << B(r.security.tpm.present) << ","
       <<   "\"enabled\":" << B(r.security.tpm.enabled) << ","
       <<   "\"ready\":" << B(r.security.tpm.ready) << ","
+      <<   "\"readinessKnown\":" << B(r.security.tpm.readinessKnown) << ","
       <<   "\"specVersion\":" << Q(r.security.tpm.specVersion) << ","
       <<   "\"manufacturerId\":" << Q(r.security.tpm.manufacturerId)
       <<   ",\"status\":" << StatusS(r.security.tpm.status)
@@ -321,6 +327,24 @@ std::string RenderJson(const AssessmentResult& r) {
     }
     o << "]},";
 
+    const auto& hardening = r.hardening;
+    auto number = [](DWORD value, Status status) { return status == Status::Success ? std::to_string(value) : "null"; };
+    o << "\"hardening\":{\"lsaProtection\":" << SettingJson(hardening.lsaProtection)
+      << ",\"noLmHash\":" << SettingJson(hardening.noLmHash)
+      << ",\"autoPlayDisabled\":" << SettingJson(hardening.autoPlayDisabled)
+      << ",\"guestDisabled\":" << SettingJson(hardening.guestDisabled)
+      << ",\"remoteAssistanceDisabled\":" << SettingJson(hardening.remoteAssistanceDisabled)
+      << ",\"inactivitySeconds\":" << number(hardening.inactivitySeconds, hardening.inactivityStatus)
+      << ",\"inactivityStatus\":" << StatusS(hardening.inactivityStatus)
+      << ",\"lmCompatibility\":" << number(hardening.lmCompatibility, hardening.lmCompatibilityStatus)
+      << ",\"lmCompatibilityStatus\":" << StatusS(hardening.lmCompatibilityStatus)
+      << ",\"minimumPasswordLength\":" << number(hardening.minimumPasswordLength, hardening.passwordStatus)
+      << ",\"passwordStatus\":" << StatusS(hardening.passwordStatus)
+      << ",\"lockoutThreshold\":" << number(hardening.lockoutThreshold, hardening.lockoutStatus)
+      << ",\"lockoutDuration\":" << number(hardening.lockoutDuration, hardening.lockoutStatus)
+      << ",\"lockoutWindow\":" << number(hardening.lockoutWindow, hardening.lockoutStatus)
+      << ",\"lockoutStatus\":" << StatusS(hardening.lockoutStatus) << "},";
+
     // services
     o << "\"services\":[";
     for (size_t i = 0; i < r.services.entries.size(); ++i) {
@@ -442,6 +466,15 @@ std::string RenderJson(const AssessmentResult& r) {
         o << "{\"id\":" << Q(score.id) << ",\"name\":" << Q(score.description)
           << ",\"state\":" << Q(score.state) << ",\"maxPoints\":" << score.maxPoints
           << ",\"awardedPoints\":" << score.awardedPoints << ",\"reason\":" << Q(score.reason) << "}";
+    }
+    o << "],\"warnings\":[";
+    for (size_t i = 0; i < r.score.warnings.size(); ++i) {
+        if (i) o << ",";
+        const auto& warning = r.score.warnings[i];
+        o << "{\"ruleId\":" << Q(warning.ruleId) << ",\"severity\":" << Q(std::wstring(ToW(warning.severity)))
+          << ",\"title\":" << Q(warning.title) << ",\"detail\":" << Q(warning.detail)
+          << ",\"recommendation\":" << Q(warning.recommendation)
+          << ",\"verificationOnly\":" << B(warning.verificationOnly) << "}";
     }
     o << "]}}";
     return o.str();

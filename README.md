@@ -47,11 +47,11 @@ A read only app built on C++ extracting all the security information from your c
 
 # Usage 
 
-- Open a command prompt window, elevated or notÃƒâ€šÃ‚Â¹
+- Open a command prompt window, elevated or not[^1]
 
 - Run the binary
 
-Ãƒâ€šÃ‚Â¹ If not elevated, the app is unable to load all information.
+[^1]: Without elevation, some restricted security checks remain unverified.
 
 ## Build
 
@@ -92,7 +92,7 @@ Defender JSON fields have individual status companions (for example, `cloudProte
 
 ## Scoring
 
-Smart App Control earns 25/50 points in evaluation mode and 50/50 when enabled. Disabled or unavailable states earn zero. Defender's no-active-threats check contributes 20 points. The OS category totals 145 points and malware protection totals 195. Windows Update has its own 60-point category, keeping the overall maximum at 1000. Score states describe each result, such as Supported, Available, Clear, Running, or Complete.
+Smart App Control earns 25/50 points in evaluation mode and 50/50 when enabled. Disabled or unavailable states earn zero. Defender's no-active-threats check contributes 20 points. The OS category totals 200 points and malware protection totals 180. Windows Update has its own 60-point category, keeping the overall maximum at 1000. Score states describe each result, such as Supported, Available, Clear, Running, or Complete.
 
 ### Windows Update
 
@@ -104,19 +104,19 @@ The console uses blue for service identifiers, white for display names, and cyan
 
 | Check | Maximum | Scoring |
 | --- | ---: | --- |
-| Windows update details available | 30 | Installed update revision can be read; this does not prove Windows is up to date. |
+| Windows update details available | 0 | Informational metadata; readability does not establish security. |
 | Pending Windows updates | 0 | Informational only; counts and types never change the score. |
-| Update service readiness | 15 | 5 each for Windows Update, BITS, and Update Orchestrator when enabled and available; idle services that start on demand qualify. |
-| Update restart completed | 10 | No update restart is required. |
-| Latest update installation | 5 | The latest recorded installation succeeded. |
+| Update service readiness | 30 | 10 each for Windows Update, BITS, and Update Orchestrator when enabled and available; idle services that start on demand qualify. |
+| Update restart completed | 15 | No update restart is required. |
+| Latest update installation | 15 | The latest recorded installation succeeded. |
 
-The existing update-details rule retains its `os.patch` ID in Windows Update. Service, restart, and history weights remain unchanged. Pending updates remain informational. Following the network-hardening expansion, TPM key-protection availability is worth 60 points; assessment administrator access remains 5 points. The overall maximum remains 1000. JSON includes classification, product, type, and severity fields for each update. Failed or incomplete reads do not earn credit for scored checks.
+The existing update-details rule retains its `os.patch` ID in Windows Update. Service readiness, restart completion, and installation history now carry the Windows Update score. Pending updates remain informational. Following the network-hardening expansion, TPM key-protection availability is worth 40 points; assessment administrator access is informational. The overall maximum remains 1000. JSON includes classification, product, type, and severity fields for each update. Failed or incomplete reads do not earn credit for scored checks.
 
 ## Registered antivirus fallback
 
-The app reads antivirus registrations through the native Windows Security Center COM API. When a third-party antivirus is registered, the console lists every registered product and its reported state instead of the inactive Defender feature list. Each product receives an independent score of 195/195 when Windows reports it enabled, or 0/195 otherwise. Disabled, snoozed, expired, and unreadable states receive no credit. Signature currency is informational.
+The app reads antivirus registrations through the native Windows Security Center COM API. When a third-party antivirus is registered, the console lists every registered product and its reported state instead of the inactive Defender feature list. Each product receives an independent score of 180/180 when Windows reports it enabled, or 0/180 otherwise. Disabled, snoozed, expired, and unreadable states receive no credit. Signature currency is informational.
 
-The malware category contributes at most 195 points to the overall 1000-point score: any confirmed enabled product satisfies this category. Multiple enabled products do not multiply the overall score. Normal Defender-only operation retains the existing detailed scoring; registration scoring also provides a fallback when Defender's own status is unavailable or inactive.
+The malware category contributes at most 180 points to the overall 1000-point score: any confirmed enabled product satisfies this category. Multiple enabled products do not multiply the overall score. Normal Defender-only operation retains the existing detailed scoring; registration scoring also provides a fallback when Defender's own status is unavailable or inactive.
 
 When a third-party antivirus is registered, Defender periodic scanning is shown separately and never affects scoring. Its state comes from Defender's `AMRunningMode` (`SxS Passive Mode` means enabled); unavailable or unrecognized modes display Unknown. JSON includes registration details under `antivirus`, separate product scores under `score.antivirusScores`, and `defender.periodicScanning`.
 
@@ -147,37 +147,48 @@ Every entry identifies its scope. App permissions describe defaults, not active 
 
 Policy mappings follow Microsoft's [Privacy policy reference](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-privacy) and [System policy reference](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-system), together with Windows' installed ADMX definitions.
 
-## Network Security
+## Security checks and report layout
 
-The network section was expanded after reviewing [Apotrope's network, SMB, and Remote Desktop checks](https://github.com/hexorcist404/apotrope). Only relevant checks were selected, with independent native implementations: the app does not run Apotrope, PowerShell, external tools, or network probes.
+Selected checks were inspired by [Apotrope](https://github.com/hexorcist404/apotrope) and implemented independently with native Windows interfaces. The app does not run Apotrope, PowerShell, external tools, or network probes.
 
-- Firewall service, Domain/Private/Public enablement, active profile markers, and default inbound/outbound actions.
-- SMB1 server configuration and legacy client-driver availability, incoming/outgoing signing requirements, insecure guest logons, global server encryption, and rejection of unencrypted access. SMB settings come from the Windows SMB provider's read-only `GetConfiguration` methods through COM/WMI, rather than guesses based on registry defaults. An absent SMB1 redirector service is treated as unavailable for use; an unreadable driver setting is unknown.
-- LLMNR policy and NetBIOS configuration on active, non-loopback IPv4 adapters. Missing LLMNR policy is **Not configured**, not proof that multicast resolution is disabled. DHCP-controlled NetBIOS configuration does not prove the effective state is disabled.
-- Remote Desktop enablement, Network Level Authentication requirement, and configured RDP port. Registry policy takes precedence over local configuration. The score accepts disabled RDP or enabled RDP with verified NLA; configuration is not proof of reachability.
-- Only adapters reported Up are shown in the console, excluding all loopback interfaces. Their addresses, gateways, DNS servers, MAC addresses, DHCP information, and NetBIOS settings are grouped under Active Network Adapters. Disconnected and loopback adapters remain available in the JSON inventory. IPv6 presence, DNS provider, and VPN-name heuristics do not affect scoring.
-- Local TCP listeners across IPv4 and IPv6 remain available in JSON and are omitted from the console. UDP enumeration is restricted in the report to port 69 for TFTP review. FTP/Telnet/TFTP ports bound beyond loopback receive review notes; the port alone does not identify the protocol. Process lookup is cached by PID, requires only limited query access, and retains unknown names when access is denied or a process exits.
+The compact console groups firewall controls, SMB protection, remote access, credential/device protection, and local account policies. Related values share rows when they fit; long values are preserved. Adapter inventory, local TCP listeners, UDP port 69 inventory, configured RDP port, and explanatory RDP scope metadata are omitted from the console. Existing JSON inventories remain available.
 
-Listeners and SMB encryption settings are informational. The app does not probe connectivity or claim that a listener is internet-accessible. Individual shares can require encryption independently of global settings. Failed endpoint reads are marked incomplete instead of reported as no listeners. JSON adds network security configuration, per-setting status/source/reason, adapter NetBIOS status, endpoint owner/binding information, and separate IPv4/IPv6 query statuses; existing fields remain available.
+New security checks include:
 
-### Revised score allocation
+- Credential Guard's running state and the actual protection level of the LSASS process.
+- Blocking legacy LM password-hash storage and requiring NTLMv2-only outgoing responses by explicit policy. LM hash policy applies at the next password change and does not establish whether old hashes already exist.
+- Device AutoPlay policy covering all drive types and an explicit device inactivity lock within 15 minutes. User screen-saver policies can impose additional locking.
+- UAC prompts on the secure desktop, the built-in Guest account identified by RID 501, and blocking solicited Remote Assistance invitations when unused.
+- Local SAM minimum password length (12+ characters for full credit; 8-11 for half) and account lockout (1-10 attempts, lockout/reset windows at least 15 minutes; shorter windows receive half). Domain and Microsoft accounts may use different policies. These are this app's selected hardening thresholds, not a compliance certification.
+
+SMB configuration comes from the Windows SMB provider's read-only `GetConfiguration` methods through COM/WMI. LLMNR and Remote Desktop policies take precedence where applicable; missing configuration is not silently treated as secure or insecure. DHCP-controlled NetBIOS does not establish that NetBIOS is disabled. Listeners and encryption settings do not prove internet reachability; an individual SMB share can require encryption independently of global settings.
+
+### Score allocation
 
 | Category | Maximum |
 | --- | ---: |
-| Hardware Security | 180 |
-| Operating System | 145 |
+| Hardware Security | 150 |
+| Operating System | 200 |
 | Windows Update | 60 |
-| Malware Protection | 195 |
-| Network Security | 180 |
-| Encryption | 160 |
-| Account Security | 80 |
+| Malware Protection | 180 |
+| Network Security | 200 |
+| Encryption | 90 |
+| Account Security | 120 |
 | Software inventory and privacy | 0 (informational) |
 | **Total** | **1000** |
 
-Network retains 60 points for firewall profile coverage, 20 for default inbound blocking, and 20 for the firewall service. Eight additional checks are worth 10 each: SMB1 server disabled, SMB1 client disabled/absent, incoming SMB signing required, outgoing SMB signing required, insecure SMB guests blocked, LLMNR explicitly disabled, NetBIOS disabled on all active IPv4 adapters, and RDP disabled or NLA required. NetBIOS is satisfied as not applicable when adapter enumeration succeeds and no active non-loopback IPv4 adapter exists. Unknown readings earn no credit.
+BitLocker is now **50 points (5%)**, with 25 points for verified partial coverage. TPM availability is 40 points. Smart App Control remains 50 when enforcing and 25 in evaluation. Defender real-time protection is 45 points; all granular malware checks total 180. Registered antivirus scores independently earn 180 or zero based on the state Windows reports, with the overall category capped at 180. Existing stable rule IDs remain, including zero-weight informational rules. Update metadata readability and assessment elevation no longer earn security points. Unknown data never become full credit; native TPM presence can earn partial hardware credit while readiness remains explicitly unverified.
 
-The 80 new points replace 40 inventory-completion points, 35 CPU-capability points (virtualization, AES acceleration, NX), and 5 TPM-availability points. These capabilities and inventory results remain visible as information; they do not by themselves establish an enforced security configuration. Stable rule IDs remain in JSON with zero maximum for informational checks. Scores from earlier versions are therefore not directly comparable without considering the changed weights.
+### Warnings
 
-Native sources: Microsoft's [SMB configuration provider](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/smb/getconfiguration-msft-smbserverconfiguration), [IP Helper TCP table API](https://learn.microsoft.com/en-us/windows/win32/api/iphlpapi/nf-iphlpapi-getextendedtcptable), [network adapter configuration](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-networkadapterconfiguration), [DNS Client policies](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-admx-dnsclient), and [Remote Desktop policies](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-remotedesktopservices).
+The report ends with **rule breakdown, total score, then warnings**, ordered Critical, High, Medium, Low. Warnings give the finding, context, and an action to review; they do not apply additional point deductions. Confirmed weaknesses are distinguished from missing settings, access failures, and unsupported checks. Unverified checks are grouped in one Low-severity verification-gap notice and are not described as confirmed vulnerabilities. JSON includes `score.warnings` with severity, rule ID, title, detail, recommendation, and `verificationOnly`, plus native readings under `hardening`.
 
-The console separates categories with section rules, uses spaced `[+]` headings for groups, and indented middle dots for facts (plain dots when redirected or `NO_COLOR` is set). Name Resolution, Remote Desktop, SMB hardening, and informational SMB encryption have separate headings. Active adapter counts exclude disconnected and loopback interfaces. These display changes do not change scoring.
+### Collection performance
+
+Independent collectors use four COM-initialized workers, joined before scoring and rendering. Non-admin TPM presence/version use [TPM Base Services](https://learn.microsoft.com/en-us/windows/win32/api/tbs/nf-tbs-tbsi_getdeviceinfo), keeping readiness unverified. Non-admin BitLocker checks return AccessDenied directly because their WMI namespace requires elevation. Console runs skip endpoint enumeration that is no longer displayed; JSON retains the inventory. No timeout is interpreted as a successful or secure state.
+
+For optional local profiling, set `SA_TRACE_TIMINGS=1` before running the app. Collector durations go to stderr; ordinary report output is unchanged. On the development machine, a non-admin baseline took 10.994 seconds, including roughly five seconds each for restricted TPM and BitLocker WMI connections. Five optimized Release `--json --no-hash` runs took 0.779, 0.784, 0.802, 0.817, and 0.808 seconds (median 0.802). These are local warm-run observations, not a speed guarantee for every machine or provider.
+
+The C++23 cleanup uses `std::expected` for typed registry read failures, `std::out_ptr` with owned native API buffers, and ranges algorithms. Joined worker lifetimes and bounded `std::span` topology traversal avoid detached work and unbounded native-record iteration. WMI extractors reject null objects and preserve unavailable states.
+
+Native references: [SMB configuration](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/smb/getconfiguration-msft-smbserverconfiguration), [LSA process protection](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/ns-processthreadsapi-process_protection_level_information), [local account policy](https://learn.microsoft.com/en-us/windows/win32/api/lmaccess/nf-lmaccess-netusermodalsget), [LAN Manager authentication levels](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/security-policy-settings/network-security-lan-manager-authentication-level), and [Remote Desktop policies](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-remotedesktopservices).

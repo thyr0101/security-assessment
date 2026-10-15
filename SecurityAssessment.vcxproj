@@ -61,6 +61,7 @@
     <ClCompile Include="src\Collectors\AntivirusCollector.cpp" />
     <ClCompile Include="src\Collectors\FirewallCollector.cpp" />
     <ClCompile Include="src\Collectors\NetworkCollector.cpp" />
+    <ClCompile Include="src\Collectors\HardeningCollector.cpp" />
     <ClCompile Include="src\Collectors\StorageCollector.cpp" />
     <ClCompile Include="src\Collectors\ApplicationCollector.cpp" />
     <ClCompile Include="src\Collectors\PrivacyCollector.cpp" />
@@ -83,6 +84,7 @@
     <ClInclude Include="src\Collectors\AntivirusCollector.h" />
     <ClInclude Include="src\Collectors\FirewallCollector.h" />
     <ClInclude Include="src\Collectors\NetworkCollector.h" />
+    <ClInclude Include="src\Collectors\HardeningCollector.h" />
     <ClInclude Include="src\Collectors\StorageCollector.h" />
     <ClInclude Include="src\Collectors\ApplicationCollector.h" />
     <ClInclude Include="src\Collectors\PrivacyCollector.h" />

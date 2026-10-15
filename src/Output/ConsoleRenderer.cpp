@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <ranges>
 
 // Presentation only: this file formats values that were already collected and scored.
 // Colors use ANSI escape sequences, enabled only when stdout is a real console that
@@ -18,6 +19,7 @@ namespace {
 constexpr size_t kWidth = 62;     // total width of banners / section rules
 constexpr size_t kLabel = 22;     // width of the label column (label + at least one space)
 
+size_t g_width = 100;
 bool g_color = false;             // ANSI colors active?
 
 // ---- palette (empty strings when color is off) ----
@@ -108,10 +110,7 @@ void KV(const wchar_t* label, const std::wstring& value, const wchar_t* color = 
 // Pair short facts only when their full values fit; never truncate report data.
 void Pair(const wchar_t* first, const std::wstring& value, const wchar_t* second,
           const std::wstring& other, const wchar_t* color = nullptr, const wchar_t* otherColor = nullptr) {
-    CONSOLE_SCREEN_BUFFER_INFO info{};
-    size_t width = 100; // plain reports have a predictable, readable width
-    if (::GetConsoleScreenBufferInfo(::GetStdHandle(STD_OUTPUT_HANDLE), &info))
-        width = static_cast<size_t>(info.srWindow.Right - info.srWindow.Left + 1);
+    const size_t width = g_width;
     const size_t cell = (std::max)(kLabel, std::wstring(first).size() + 1) + value.size();
     const size_t secondCell = (std::max)(kLabel, std::wstring(second).size() + 1) + other.size();
     const size_t column = (std::max)(size_t{46}, cell + 3);
@@ -122,6 +121,20 @@ void Pair(const wchar_t* first, const std::wstring& value, const wchar_t* second
           << (color ? color : Wht()) << value << Rst() << std::wstring(column - cell, L' ')
           << Dim() << GDot() << L" " << Lbl() << PadRight(std::wstring(second) + L" ", kLabel) << Rst()
           << (otherColor ? otherColor : color ? color : Wht()) << other << Rst() << L"\n";
+}
+
+void Paragraph(std::wstring_view text, size_t indent, const wchar_t* color) {
+    const size_t width = g_width > indent + 4 ? g_width - indent - 2 : 32;
+    while (!text.empty()) {
+        size_t count = (std::min)(text.size(), width);
+        if (count < text.size()) {
+            const auto space = text.rfind(L' ', count);
+            if (space != std::wstring_view::npos && space > 0) count = space;
+        }
+        out() << std::wstring(indent, L' ') << color << text.substr(0, count) << Rst() << L"\n";
+        text.remove_prefix(count);
+        while (!text.empty() && text.front() == L' ') text.remove_prefix(1);
+    }
 }
 
 void Flag(const wchar_t* label, bool on) {
@@ -164,6 +177,9 @@ std::wstring UpdateTypes(const WindowsUpdateItem& item) {
 class ConsoleStyle {
 public:
     ConsoleStyle() {
+        CONSOLE_SCREEN_BUFFER_INFO info{};
+        g_width = ::GetConsoleScreenBufferInfo(::GetStdHandle(STD_OUTPUT_HANDLE), &info)
+            ? static_cast<size_t>((std::max)(40, int(info.srWindow.Right - info.srWindow.Left + 1))) : 100;
         wchar_t buffer[1]{};
         if (::GetEnvironmentVariableW(L"NO_COLOR", buffer, _countof(buffer)) != 0) return;
 
@@ -228,7 +244,7 @@ void RenderConsole(const AssessmentResult& r) {
                 ? (r.security.tpm.specVersion.empty() ? std::wstring(L"Present")
                                                       : r.security.tpm.specVersion)
                 : std::wstring(L"Absent"))
-            + L" / " + (r.security.tpm.ready ? L"Ready" : L"NotReady");
+            + L" / " + (r.security.tpm.ready ? L"Ready" : r.security.tpm.readinessKnown ? L"Not ready" : L"Readiness unknown");
         KV(L"TPM", tpmKnown ? tpmText : L"Unknown (" + std::wstring(ToW(r.security.tpm.status)) + L")",
            !tpmKnown ? Yel() : (r.security.tpm.present && r.security.tpm.ready) ? Grn() : Red());
     }
@@ -302,20 +318,28 @@ void RenderConsole(const AssessmentResult& r) {
     // ------------------------------------------------------------ Network security
     Section(L"Network Security");
     const auto& network = r.network;
-    auto setting = [&](const wchar_t* label, const NetworkSetting& value,
-                       const wchar_t* yes = L"Enabled", const wchar_t* no = L"Disabled",
-                       bool favorable = true, bool informational = false) {
+    struct SettingView {
+        const wchar_t* label;
+        const SecuritySetting& value;
+        const wchar_t* yes = L"Enabled";
+        const wchar_t* no = L"Disabled";
+        bool favorable = true;
+        bool informational = false;
+    };
+    auto settingText = [](const SettingView& view) {
+        const auto& value = view.value;
         const bool known = value.status == Status::Success && (value.enabled == Tri::Yes || value.enabled == Tri::No);
-        const auto text = known ? std::wstring(value.enabled == Tri::Yes ? yes : no)
+        return known ? std::wstring(value.enabled == Tri::Yes ? view.yes : view.no)
             : value.status == Status::NotFound ? std::wstring(L"Not configured")
             : L"Unknown (" + std::wstring(ToW(value.status)) + L")";
-        KV(label, text, !known ? Yel() : informational ? Cyn()
-            : ((value.enabled == Tri::Yes) == favorable) ? Grn() : Yel());
     };
-    auto join = [](const std::vector<std::wstring>& values) {
-        std::wstring text;
-        for (const auto& value : values) { if (!text.empty()) text += L", "; text += value; }
-        return text.empty() ? std::wstring(L"None") : text;
+    auto settingColor = [](const SettingView& view) {
+        const bool known = view.value.status == Status::Success && (view.value.enabled == Tri::Yes || view.value.enabled == Tri::No);
+        return !known ? Yel() : view.informational ? Cyn()
+            : ((view.value.enabled == Tri::Yes) == view.favorable) ? Grn() : Yel();
+    };
+    auto settings = [&](const SettingView& first, const SettingView& second) {
+        Pair(first.label, settingText(first), second.label, settingText(second), settingColor(first), settingColor(second));
     };
     SubHeader(L"Windows Firewall", L"", Dim());
     Flag(L"Firewall service", r.firewall.serviceRunning, r.firewall.serviceStatus);
@@ -337,79 +361,47 @@ void RenderConsole(const AssessmentResult& r) {
     if (r.firewall.profiles.empty()) KV(L"Firewall profiles", L"Unknown", Yel());
     if (r.firewall.activeProfilesStatus != Status::Success) KV(L"Active profiles", L"Unknown", Yel());
 
-    SubHeader(L"File Sharing (SMB)", L"", Dim());
-    setting(L"Legacy SMB1 server", network.smb1Server, L"Enabled", L"Disabled", false);
-    setting(L"Legacy SMB1 client", network.smb1Client, L"Available", L"Disabled / absent", false);
-    setting(L"Incoming SMB signing", network.smbServerSigning, L"Required", L"Not required");
-    setting(L"Outgoing SMB signing", network.smbClientSigning, L"Required", L"Not required");
-    setting(L"SMB guest logons", network.smbGuestLogons, L"Allowed", L"Blocked", false);
-    SubHeader(L"SMB Encryption (informational)", L"", Dim());
-    setting(L"Global SMB encryption", network.smbEncryption, L"Enabled", L"Disabled", true, true);
-    setting(L"Reject unencrypted SMB", network.smbRejectUnencrypted, L"Yes", L"No", true, true);
-    KV(L"Encryption scope", L"Informational server settings; individual shares may also require encryption.", Dim());
+    SubHeader(L"File Sharing & Authentication", L"", Dim());
+    settings({L"SMB1 server", network.smb1Server, L"Enabled", L"Disabled", false},
+             {L"SMB1 client", network.smb1Client, L"Available", L"Disabled / absent", false});
+    settings({L"Incoming SMB signing", network.smbServerSigning, L"Required", L"Not required"},
+             {L"Outgoing SMB signing", network.smbClientSigning, L"Required", L"Not required"});
+    settings({L"SMB guest logons", network.smbGuestLogons, L"Allowed", L"Blocked", false},
+             {L"LLMNR policy", network.llmnr, L"Allowed", L"Disabled", false});
+    const auto& hardening = r.hardening;
+    KV(L"LAN Manager policy", hardening.lmCompatibilityStatus != Status::Success ? L"Unknown / not configured"
+        : hardening.lmCompatibility >= 3 ? L"NTLMv2-only responses (level " + Num(hardening.lmCompatibility) + L")"
+        : L"Legacy responses allowed (level " + Num(hardening.lmCompatibility) + L")",
+        hardening.lmCompatibilityStatus == Status::Success && hardening.lmCompatibility >= 3 ? Grn() : Yel());
+    SubHeader(L"SMB Encryption & Remote Access", L"", Dim());
+    settings({L"Global SMB encryption", network.smbEncryption, L"Enabled", L"Disabled", true, true},
+             {L"Reject unencrypted SMB", network.smbRejectUnencrypted, L"Yes", L"No", true, true});
+    KV(L"Encryption scope", L"Shares can require encryption independently of the global setting.", Dim());
+    settings({L"Remote Desktop", network.rdp, L"Enabled", L"Disabled", false, true},
+             {L"RDP authentication", network.rdpNla, L"NLA required", L"NLA not required"});
 
-    SubHeader(L"Name Resolution", L"", Dim());
-    setting(L"LLMNR policy", network.llmnr, L"Allowed", L"Disabled", false);
-    SubHeader(L"Remote Desktop", L"", Dim());
-    setting(L"Remote Desktop", network.rdp, L"Enabled", L"Disabled", false, true);
-    setting(L"RDP authentication", network.rdpNla, L"NLA required", L"NLA not required");
-    KV(L"Configured RDP port", network.rdpPortStatus == Status::Success ? Num(network.rdpPort) : L"Unknown", Cyn());
-    KV(L"RDP scope", L"Configuration only; listeners and firewall rules determine actual access.", Dim());
-
-    auto activeAdapter = [](const NetworkAdapterInfo& adapter) {
-        return adapter.up && !adapter.isLoopback && adapter.ifType != L"Loopback";
-    };
-    const auto activeCount = std::count_if(network.adapters.begin(), network.adapters.end(), activeAdapter);
-    SubHeader(L"Active Network Adapters", Num(activeCount) +
-        (network.status == Status::Success ? L" active" : L" listed (incomplete)"), Dim());
-    if (!activeCount && network.status == Status::Success) KV(L"Adapters", L"None", Dim());
-    for (const auto& adapter : network.adapters) {
-        if (!activeAdapter(adapter)) continue;
-        SubHeader(adapter.name, adapter.ifType + L" / Up", Cyn());
-        KV(L"Description", adapter.description, Dim());
-        Pair(L"IPv4", join(adapter.ipv4), L"IPv6", join(adapter.ipv6), Cyn());
-        Pair(L"Gateway", join(adapter.gateways), L"DNS", join(adapter.dns), Cyn());
-        Pair(L"MAC", adapter.macAddress.empty() ? L"None" : adapter.macAddress,
-             L"DHCP", adapter.dhcp ? L"Enabled" : L"Disabled", Cyn());
-        if (!adapter.dhcpServer.empty()) KV(L"DHCP server", adapter.dhcpServer, Cyn());
-        if (!adapter.isLoopback && !adapter.ipv4.empty()) {
-            const auto netbios = adapter.netbiosStatus != Status::Success ? std::wstring(L"Unknown (") + ToW(adapter.netbiosStatus) + L")"
-                : adapter.netbiosOptions == 2 ? std::wstring(L"Disabled") : adapter.netbiosOptions == 1 ? std::wstring(L"Enabled")
-                : std::wstring(L"DHCP controlled (effective state unverified)");
-            KV(L"NetBIOS over TCP/IP", netbios, adapter.netbiosStatus == Status::Success && adapter.netbiosOptions == 2 ? Grn() : Yel());
-        }
-    }
-    if (network.status != Status::Success) KV(L"Adapter query", ToW(network.status), Yel());
-
-    auto endpoints = [&](const wchar_t* protocol, const wchar_t* title, Status ipv4, Status ipv6) {
-        size_t count = 0;
-        for (const auto& endpoint : network.endpoints) if (endpoint.protocol == protocol) ++count;
-        const bool complete = ipv4 == Status::Success && ipv6 == Status::Success;
-        SubHeader(title, Num(count) + (complete ? L" bindings" : L" bindings (incomplete)"), complete ? Dim() : Yel());
-        if (!complete) Pair(L"IPv4 query", ToW(ipv4), L"IPv6 query", ToW(ipv6), Yel());
-        if (!count && complete) out() << L"    " << Dim() << L"None" << Rst() << L"\n";
-        for (size_t i = 0; i < network.endpoints.size();) {
-            const auto& endpoint = network.endpoints[i];
-            if (endpoint.protocol != protocol) { ++i; continue; }
-            size_t end = i + 1;
-            while (end < network.endpoints.size() && network.endpoints[end].protocol == endpoint.protocol &&
-                   network.endpoints[end].port == endpoint.port && network.endpoints[end].processId == endpoint.processId) ++end;
-            out() << L"    " << Blu() << endpoint.protocol << L" " << endpoint.port << Rst()
-                  << L"  " << Wht() << endpoint.processName << Dim() << L" (PID " << endpoint.processId << L")" << Rst() << L"\n";
-            for (size_t j = i; j < end; ++j) {
-                const auto& binding = network.endpoints[j];
-                out() << L"      " << Dim() << (j + 1 == end ? GCorner() : GTee()) << L" " << Cyn()
-                      << (binding.family == L"IPv6" ? L"[" + binding.address + L"]" : binding.address)
-                      << Dim() << L"  [" << binding.binding << L"]" << Rst();
-                if (!binding.reviewNote.empty()) out() << L"  " << Yel() << binding.reviewNote << Rst();
-                out() << L"\n";
-            }
-            i = end;
-        }
-    };
-    endpoints(L"UDP", L"UDP Port 69 / TFTP Review (informational)", network.udp4Status, network.udp6Status);
-    if (std::any_of(network.endpoints.begin(), network.endpoints.end(), [](const auto& endpoint) { return endpoint.protocol == L"UDP"; }))
-        KV(L"Binding scope", L"Local bindings do not prove remote reachability or identify the application protocol.", Dim());
+    Section(L"Device & Account Security");
+    SubHeader(L"Credential & Device Protection", L"", Dim());
+    settings({L"LSA process", hardening.lsaProtection, L"Protected", L"Unprotected"},
+             {L"LM hash storage", hardening.noLmHash, L"Blocked", L"Allowed"});
+    settings({L"AutoPlay (all drives)", hardening.autoPlayDisabled, L"Blocked", L"Not blocked"},
+             {L"Assistance invitations", hardening.remoteAssistanceDisabled, L"Blocked", L"Allowed"});
+    const auto unknown = [](Status status) { return status == Status::NotFound ? std::wstring(L"Not configured")
+        : L"Unknown (" + std::wstring(ToW(status)) + L")"; };
+    KV(L"Device inactivity lock", hardening.inactivityStatus != Status::Success ? unknown(hardening.inactivityStatus)
+        : hardening.inactivitySeconds ? Num(hardening.inactivitySeconds) + L" seconds" : L"Not configured",
+        hardening.inactivityStatus == Status::Success && hardening.inactivitySeconds && hardening.inactivitySeconds <= 900 ? Grn() : Yel());
+    SubHeader(L"Local Account Policies", L"", Dim());
+    FlagPair(L"UAC", r.security.uac.enabled, r.security.uac.status,
+             L"UAC secure desktop", r.security.uac.enabled && r.security.uac.promptOnSecureDesktop == 1, r.security.uac.status);
+    Pair(L"Built-in Guest", settingText({L"", hardening.guestDisabled, L"Disabled", L"Enabled"}),
+         L"Minimum password", hardening.passwordStatus == Status::Success ? Num(hardening.minimumPasswordLength) + L" characters" : unknown(hardening.passwordStatus), Cyn());
+    KV(L"Account lockout", hardening.lockoutStatus != Status::Success ? unknown(hardening.lockoutStatus)
+        : !hardening.lockoutThreshold ? L"Not configured"
+        : Num(hardening.lockoutThreshold) + L" attempts; duration " +
+            (hardening.lockoutDuration == MAXDWORD ? L"until administrator unlock" : Num(hardening.lockoutDuration) + L"s") +
+            L"; reset window " + Num(hardening.lockoutWindow) + L"s", Cyn());
+    KV(L"Account policy scope", L"Local SAM accounts; domain and Microsoft accounts may use different policies.", Dim());
 
     // ------------------------------------------------------------ Windows Update
     Section(L"Windows Update");
@@ -591,30 +583,24 @@ void RenderConsole(const AssessmentResult& r) {
             privacyGroups.push_back(finding.group);
     for (const auto& group : privacyGroups) {
         if (!group.empty()) SubHeader(group, L"", Dim());
+        const PrivacyFinding* pending = nullptr;
+        auto text = [](const PrivacyFinding& finding) {
+            return finding.value + (finding.scope.empty() ? L"" : L" [" + finding.scope + L"]");
+        };
+        auto color = [](const PrivacyFinding& finding) {
+            return finding.status == Status::Success ? Cyn() : finding.status == Status::NotFound ? Dim() : Yel();
+        };
         for (const auto& finding : r.privacyFindings) {
             if (finding.group != group) continue;
-            out() << L"    " << Dim() << GDot() << L" " << Lbl() << PadRight(finding.name + L" ", 29) << Rst()
-                  << (finding.status == Status::Success ? Cyn() : finding.status == Status::NotFound ? Dim() : Yel())
-                  << finding.value << Rst();
-            if (!finding.scope.empty()) out() << Dim() << L"  [" << finding.scope << L"]" << Rst();
-            out() << L"\n";
+            if (!pending) { pending = &finding; continue; }
+            Pair(pending->name.c_str(), text(*pending), finding.name.c_str(), text(finding), color(*pending), color(finding));
+            pending = nullptr;
         }
+        if (pending) KV(pending->name.c_str(), text(*pending), color(*pending));
     }
     KV(L"Permission scope", L"Defaults only; per-app overrides and desktop-app exceptions can apply.", Dim());
 
-    // ------------------------------------------------------------ Score
-    out() << L"\n";
-    Banner(L"SECURITY SCORE");
-    {
-        const double frac = r.score.maximum > 0
-            ? static_cast<double>(r.score.total) / static_cast<double>(r.score.maximum) : 0.0;
-        const wchar_t* c = frac >= 0.80 ? Grn() : (frac >= 0.50 ? Yel() : Red());
-        out() << L"  " << Bold() << c << r.score.total << Rst()
-              << Lbl() << L" / " << r.score.maximum << Rst() << L"     "
-              << Bar(frac, 28, c) << L"  " << c
-              << static_cast<unsigned>(frac * 100.0 + 0.5) << L"%" << Rst() << L"\n";
-    }
-
+    // ------------------------------------------------------------ Rule breakdown
     out() << L"\n  " << Dim() << L"Rule breakdown (awarded / max)" << Rst() << L"\n";
 
     // Group by category so a rule can move without changing its stable ID.
@@ -648,6 +634,36 @@ void RenderConsole(const AssessmentResult& r) {
                   << Lbl() << PadLeft(Num(rl.maxPoints), 3) << Rst() << L"   "
                   << Wht() << PadRight(Utf8ToWide(rl.description), descriptionWidth) << Rst()
                   << c << L"[" << Utf8ToWide(rl.state) << L"]" << Rst() << L"\n";
+        }
+    }
+
+    // ------------------------------------------------------------ Score
+    out() << L"\n";
+    Banner(L"SECURITY SCORE");
+    {
+        const double frac = r.score.maximum > 0
+            ? static_cast<double>(r.score.total) / static_cast<double>(r.score.maximum) : 0.0;
+        const wchar_t* c = frac >= 0.80 ? Grn() : (frac >= 0.50 ? Yel() : Red());
+        out() << L"  " << Bold() << c << r.score.total << Rst()
+              << Lbl() << L" / " << r.score.maximum << Rst() << L"     "
+              << Bar(frac, 28, c) << L"  " << c
+              << static_cast<unsigned>(frac * 100.0 + 0.5) << L"%" << Rst() << L"\n";
+    }
+
+    Section(L"Warnings");
+    if (r.score.warnings.empty()) KV(L"Findings", L"No warnings from the evaluated checks.", Grn());
+    for (const auto severity : {Severity::Critical, Severity::High, Severity::Medium, Severity::Low}) {
+        const auto count = std::ranges::count(r.score.warnings, severity, &SecurityWarning::severity);
+        if (!count) continue;
+        const auto color = severity >= Severity::High ? Red() : severity == Severity::Medium ? Yel() : Cyn();
+        SubHeader(ToW(severity), Num(count) + L" warning(s)", color);
+        for (const auto& warning : r.score.warnings) {
+            if (warning.severity != severity) continue;
+            out() << L"    " << color << L"[!] " << Bold() << Utf8ToWide(warning.title) << Rst();
+            if (warning.verificationOnly) out() << Dim() << L" (verification gap)" << Rst();
+            out() << L"\n";
+            Paragraph(Utf8ToWide(warning.detail), 8, Dim());
+            Paragraph(L"Action: " + Utf8ToWide(warning.recommendation), 8, color);
         }
     }
 

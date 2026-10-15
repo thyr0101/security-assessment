@@ -273,6 +273,14 @@ static bool CallUIntMethod(IWbemServices* svc, IWbemClassObject* obj,
 }
 
 static void CollectBitLocker(StorageInfo& s) {
+    if (!IsElevated()) {
+        for (auto& volume : s.volumes) {
+            if (volume.driveType != L"Fixed") continue;
+            volume.bitLockerStatus = Status::AccessDenied;
+            volume.bitLockerNote = L"Administrator access is required to verify BitLocker protection.";
+        }
+        return;
+    }
     ComInit ci;
     WmiConnection wmi;
     std::wstring why;

@@ -1,5 +1,5 @@
 #pragma once
 #include "../Models.h"
 namespace sa {
-NetworkInfo CollectNetworkInfo();
+NetworkInfo CollectNetworkInfo(bool includeInventory = true);
 }

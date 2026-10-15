@@ -5,13 +5,28 @@
 #include <windows.h>
 #include <winternl.h>
 #include <vector>
+#include <tbs.h>
+#pragma comment(lib, "tbs.lib")
 
 #pragma comment(lib, "advapi32.lib")
 
 namespace sa {
 
-    // ---------------- TPM via WMI ----------------
+    // ---------------- TPM via TBS / elevated WMI ----------------
     static void CollectTpm(TpmInfo& t) {
+        if (!IsElevated()) {
+            // The WMI namespace requires elevation and can delay an access-denied
+            // response. TBS provides presence/version without that restricted query.
+            TPM_DEVICE_INFO device{};
+            const auto result = ::Tbsi_GetDeviceInfo(sizeof(device), &device);
+            if (result == TBS_SUCCESS) {
+                t.present = true;
+                t.specVersion = device.tpmVersion == TPM_VERSION_20 ? L"2.0"
+                    : device.tpmVersion == TPM_VERSION_12 ? L"1.2" : L"Unknown";
+                t.status = Status::Success;
+            } else t.status = result == TBS_E_TPM_NOT_FOUND ? Status::NotFound : Status::Unavailable;
+            return;
+        }
         ComInit ci;
         WmiConnection wmi;
         t.status = wmi.Connect(L"ROOT\\CIMV2\\Security\\MicrosoftTpm");
@@ -39,8 +54,9 @@ namespace sa {
             WmiGetString(o, L"ManufacturerVersion", t.manufacturerVersion);
 
             bool b = false;
-            if (WmiGetBool(o, L"IsEnabled_InitialValue", b)) t.enabled = b;
-            if (WmiGetBool(o, L"IsActivated_InitialValue", b)) t.activated = b;
+            const bool enabledKnown = WmiGetBool(o, L"IsEnabled_InitialValue", t.enabled);
+            const bool activatedKnown = WmiGetBool(o, L"IsActivated_InitialValue", t.activated);
+            t.readinessKnown = enabledKnown && activatedKnown;
             if (WmiGetBool(o, L"IsOwned_InitialValue", b)) t.owned = b;
 
             t.present = true;

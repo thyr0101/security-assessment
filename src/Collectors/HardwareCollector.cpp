@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <intrin.h>
 #include <vector>
+#include <span>
 #include <cstring>
 #include <powrprof.h>
 #pragma comment(lib, "powrprof.lib")
@@ -74,6 +75,19 @@ static void CollectCpuid(CpuInfo& c) {
     }
 }
 
+template<class Function>
+static bool VisitTopologyRecords(std::span<const BYTE> bytes, Function&& visit) {
+    constexpr size_t header = offsetof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Processor);
+    while (!bytes.empty()) {
+        if (bytes.size() < header) return false;
+        const auto* record = reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(bytes.data());
+        if (record->Size < header || record->Size > bytes.size()) return false;
+        visit(*record);
+        bytes = bytes.subspan(record->Size);
+    }
+    return true;
+}
+
 CpuInfo CollectCpuInfo() {
     CpuInfo c;
     CollectCpuid(c);
@@ -85,14 +99,12 @@ CpuInfo CollectCpuInfo() {
         std::vector<BYTE> buf(len);
         if (::GetLogicalProcessorInformationEx(RelationProcessorCore,
                 (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)buf.data(), &len)) {
-            DWORD off = 0;
             unsigned cores = 0;
-            while (off < len) {
-                auto* e = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)(buf.data() + off);
-                ++cores;
-                off += e->Size;
+            if (len <= buf.size() && VisitTopologyRecords(std::span<const BYTE>(buf.data(), len), [&](const auto& record) {
+                if (record.Relationship == RelationProcessorCore) ++cores;
+            })) {
+                c.physicalCores = cores;
             }
-            c.physicalCores = cores;
         }
     }
     // cache
@@ -102,13 +114,13 @@ CpuInfo CollectCpuInfo() {
         std::vector<BYTE> buf(len);
         if (::GetLogicalProcessorInformationEx(RelationCache,
                 (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)buf.data(), &len)) {
-            DWORD off = 0;
-            while (off < len) {
-                auto* e = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)(buf.data() + off);
-                if (e->Cache.Level == 2) c.l2CacheKB += (unsigned)(e->Cache.CacheSize / 1024);
-                if (e->Cache.Level == 3) c.l3CacheKB += (unsigned)(e->Cache.CacheSize / 1024);
-                off += e->Size;
-            }
+            if (len <= buf.size()) VisitTopologyRecords(std::span<const BYTE>(buf.data(), len), [&](const auto& record) {
+                constexpr size_t minimum = offsetof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Cache) +
+                    offsetof(CACHE_RELATIONSHIP, CacheSize) + sizeof(DWORD);
+                if (record.Relationship != RelationCache || record.Size < minimum) return;
+                if (record.Cache.Level == 2) c.l2CacheKB += record.Cache.CacheSize / 1024;
+                if (record.Cache.Level == 3) c.l3CacheKB += record.Cache.CacheSize / 1024;
+            });
         }
     }
 

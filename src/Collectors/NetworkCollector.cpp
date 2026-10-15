@@ -344,7 +344,7 @@ void CollectEndpoints(NetworkInfo& n) {
 }
 } // namespace
 
-NetworkInfo CollectNetworkInfo() {
+NetworkInfo CollectNetworkInfo(bool includeInventory) {
     NetworkInfo n;
     ComInit com;
     n.llmnr = RegistryFlag(L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\DNSClient", L"EnableMulticast");
@@ -361,7 +361,7 @@ NetworkInfo CollectNetworkInfo() {
     try { CollectNetbios(n); } catch (...) { /* Preserve adapter inventory. */ }
     // InetNtop needs Winsock initialized independently of the adapter query's scope.
     WSADATA data{};
-    if (::WSAStartup(MAKEWORD(2, 2), &data) == 0) {
+    if (includeInventory && ::WSAStartup(MAKEWORD(2, 2), &data) == 0) {
         struct Guard { ~Guard() { ::WSACleanup(); } } guard;
         try { CollectEndpoints(n); }
         catch (...) {

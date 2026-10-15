@@ -56,7 +56,7 @@ set_target_properties(SecurityAssessment PROPERTIES
 # Libraries (the sources also pull some in via #pragma comment).
 target_link_libraries(SecurityAssessment PRIVATE
   advapi32 bcrypt iphlpapi ws2_32 ole32 oleaut32 wbemuuid
-  setupapi cfgmgr32 powrprof version shlwapi crypt32 wscapi shell32 wuguid)
+  setupapi cfgmgr32 powrprof version shlwapi crypt32 wscapi shell32 wuguid tbs netapi32)
 
 option(SA_BUILD_TESTS "Build native regression checks" OFF)
 if(SA_BUILD_TESTS)

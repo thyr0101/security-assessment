@@ -58,6 +58,9 @@ private:
     const wchar_t* Red()  { return K(L"\x1b[91m"); }
     const wchar_t* Grn()  { return K(L"\x1b[92m"); }
     const wchar_t* Yel()  { return K(L"\x1b[93m"); }
+    const wchar_t* Purple() { return K(L"\x1b[38;2;190;128;255m"); }
+    const wchar_t* Orange() { return K(L"\x1b[38;2;255;165;0m"); }
+    const wchar_t* LightYellow() { return K(L"\x1b[38;2;255;235;153m"); }
     const wchar_t* Cyn()  { return K(L"\x1b[96m"); }
     const wchar_t* Blu()  { return K(L"\x1b[94m"); }
     const wchar_t* Wht()  { return K(L"\x1b[97m"); }
@@ -128,8 +131,8 @@ private:
         sectionOpen_ = true;
     }
 
-    void SubHeader(const std::wstring& title, const std::wstring& right, const wchar_t* rightColor) {
-        out() << L"\n  " << Dim() << L"[+] " << Rst() << Bold() << Wht() << title << Rst();
+    void SubHeader(const std::wstring& title, const std::wstring& right, const wchar_t* rightColor, const wchar_t* titleColor = nullptr) {
+        out() << L"\n  " << Purple() << L"[+] " << Rst() << Bold() << (titleColor ? titleColor : Wht()) << title << Rst();
         if (!right.empty()) out() << L"  " << rightColor << right << Rst();
         out() << L"\n";
     }
@@ -199,6 +202,11 @@ private:
 
     std::wstring GroupName(const std::string& category) {
         return category == "OS Security" ? L"Operating System" : Utf8ToWide(category);
+    }
+
+    const wchar_t* CategoryScoreColor(int awarded, int maximum) {
+        if (maximum > 0 && awarded >= maximum) return Grn();
+        return maximum > 0 && static_cast<double>(awarded) / maximum > 0.5 ? Orange() : Yel();
     }
 
     const wchar_t* OutcomeColor(int awarded, int max) {

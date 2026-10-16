@@ -268,7 +268,7 @@ void console_detail::ConsoleLayout::Render(const AssessmentResult& r, ReportView
         if (v.diskIndices.size() > 1) {
             out() << Dim() << L"  |  Spans ";
             for (size_t i = 0; i < v.diskIndices.size(); ++i)
-                out() << (i ? L", " : L"") << Blu() << L"Disk" << v.diskIndices[i] << Rst();
+                out() << (i ? L", " : L"") << LightYellow() << L"Disk" << v.diskIndices[i] << Rst();
         }
         out() << L"\n";
         if (v.bitLockerState == L"Unknown" && !v.bitLockerNote.empty())
@@ -285,10 +285,10 @@ void console_detail::ConsoleLayout::Render(const AssessmentResult& r, ReportView
     for (const auto index : indices) {
         const auto found = std::find_if(r.storage.disks.begin(), r.storage.disks.end(),
             [&](const auto& disk) { return disk.index == index; });
-        out() << L"  " << Bold() << Blu() << L"Disk" << index << Rst();
+        out() << L"  " << Bold() << LightYellow() << L"Disk" << index << Rst();
         if (found != r.storage.disks.end()) {
             const auto& d = *found;
-            out() << L"  " << Wht() << (d.vendor.empty() ? d.model : d.vendor + L" " + d.model)
+            out() << L"  " << Purple() << (d.vendor.empty() ? d.model : d.vendor + L" " + d.model)
                   << Dim() << L"  |  " << Cyn() << FormatBytes(d.sizeBytes)
                   << Dim() << L"  |  " << Cyn() << d.busType << Dim() << L"  " << d.mediaType << Rst();
         } else out() << Yel() << L"  Details unavailable" << Rst();
@@ -330,7 +330,7 @@ void console_detail::ConsoleLayout::Render(const AssessmentResult& r, ReportView
         }
         SubHeader(GroupName(category),
                   PadLeft(Num(gAwarded), 3) + L" / " + PadLeft(Num(gMax), 3),
-                  OutcomeColor(gAwarded, gMax));
+                  CategoryScoreColor(gAwarded, gMax), Purple());
         for (auto& rl : r.score.rules) {
             if (rl.maxPoints == 0) continue;
             if (rl.category != category) continue;
@@ -339,7 +339,7 @@ void console_detail::ConsoleLayout::Render(const AssessmentResult& r, ReportView
             out() << L"    " << c << PadLeft(Num(rl.awardedPoints), 3) << Rst() << Dim() << L" / " << Rst()
                   << Lbl() << PadLeft(Num(rl.maxPoints), 3) << Rst() << L"   "
                   << Wht() << PadRight(Utf8ToWide(rl.description), descriptionWidth) << Rst()
-                  << c << L"[" << Utf8ToWide(rl.state) << L"]" << Rst() << L"\n";
+                  << (rl.id == "os.sac" && rl.state == "Evaluation" ? Orange() : c) << L"[" << Utf8ToWide(rl.state) << L"]" << Rst() << L"\n";
         }
     }
 
@@ -363,7 +363,7 @@ void console_detail::ConsoleLayout::Render(const AssessmentResult& r, ReportView
         if (view == ReportView::Export) break;
         const auto count = std::ranges::count(r.score.warnings, severity, &SecurityWarning::severity);
         if (!count) continue;
-        const auto color = severity >= Severity::High ? Red() : severity == Severity::Medium ? Yel() : Cyn();
+        const auto color = severity >= Severity::High ? Red() : severity == Severity::Medium ? Orange() : Cyn();
         SubHeader(ToW(severity), Num(count) + L" warning(s)", color);
         for (const auto& warning : r.score.warnings) {
             if (warning.severity != severity) continue;

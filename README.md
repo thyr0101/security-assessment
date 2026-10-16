@@ -16,7 +16,7 @@ It uses built-in Windows interfaces. It does not contact online services, run ex
 - **Account protection:** secure permission prompts, the built-in Guest account, account lockout, and Remote Assistance invitations.
 - **Windows Update:** pending updates from the local cache, update-service readiness, restart requirements and the latest recorded installation result. Pending updates are listed without affecting the score.
 
-The report also includes startup-location readability and threshold scan results. Privacy settings and minimum password length are not collected.
+Threshold findings show registry and directory counts, review thresholds, paths and descriptions. They are informational and do not affect the score; high counts are not evidence of malware. Privacy settings and minimum password length are not collected.
 
 ## Run an assessment
 
@@ -26,9 +26,17 @@ The documented build configuration targets **64-bit Windows 10 or newer**. Open 
 .\SecurityAssessment.exe
 ```
 
-Run the terminal **as administrator** for the fullest assessment. Without elevation, restricted checks remain unverified instead of being reported as disabled.
+Run the terminal **as administrator** for the fullest assessment. A warning box identifies live assessments without administrator access. Restricted checks remain unverified instead of being reported as disabled.
 
 Each category appears in its own box, with long values wrapping inside the border. The console ends with the **rule breakdown**, **total score**, and **warnings**, in that order. Warnings are grouped as Critical, High, Medium, or Low and include an action to review. Missing evidence is clearly identified as a verification gap.
+
+## Open Windows settings
+
+Relevant headings and checks have Settings shortcuts in an interactive console. In Windows Terminal, use **Ctrl+click** on `[Settings]`; the terminal may ask you to confirm opening the URI. Other terminals show an identifier such as `[Settings: update]`.
+
+Use `SecurityAssessment.exe --settings update` to open Windows Update directly, or `SecurityAssessment.exe --settings` to list supported pages. Navigation does not collect an assessment. System opens **System > About**. Checks without a dedicated modern Settings page use their relevant parent page; availability depends on Windows version and edition.
+
+Shortcuts always open settings on this computer, including when viewing a backup. No security setting is changed automatically. Redirected reports omit buttons and terminal control sequences.
 
 ## Save a JSON report
 
@@ -71,6 +79,7 @@ For command help:
 ## Understanding the results
 
 - The maximum score remains **1000**; BitLocker contributes up to **50** points.
+- When any third-party antivirus is registered, Defender is **Not scored**, regardless of either product's state. The antivirus category uses third-party products only: confirmed enabled protection earns credit; disabled or unknown protection earns zero. The category cap remains **180** points.
 - Network sign-in protection distinguishes an unconfigured policy, denied access, invalid data and read errors. An absent policy is not assumed to be enabled or disabled.
 - Only verified results receive the corresponding credit. Unreadable or missing configuration is distinguished from a confirmed weakness.
 - Warnings explain the findings and do not apply extra score deductions.

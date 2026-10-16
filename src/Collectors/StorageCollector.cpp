@@ -1,4 +1,5 @@
 #include "StorageCollector.h"
+#include "../Warnings.h"
 #include "../WmiHelper.h"
 #include "../Utilities.h"
 #include <windows.h>
@@ -271,7 +272,7 @@ static void CollectBitLocker(StorageInfo& s) {
         for (auto& volume : s.volumes) {
             if (volume.driveType != L"Fixed") continue;
             volume.bitLockerStatus = Status::AccessDenied;
-            volume.bitLockerNote = L"Administrator access is required to verify BitLocker protection.";
+            volume.bitLockerNote = warnings::bitLockerElevation;
         }
         return;
     }

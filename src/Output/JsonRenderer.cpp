@@ -115,20 +115,16 @@ std::string RenderJson(const AssessmentResult& r, JsonFormat format) {
         item.Set("diskMappingStatus", StatusS(value.diskMappingStatus));
         item.Set("diskIndices", Array(value.diskIndices, [](auto index) { return std::to_string(index); })); return item.Finish();
     })); root.Set("storage", storage.Finish());
-    std::vector<RegistryFinding> registry;
-    for (const auto& value : r.registryFindings)
-        if (value.exceeded || (value.status != Status::Success && value.status != Status::NotFound)) registry.push_back(value);
-    root.Set("registryFindings", Array(registry, [](const auto& value) {
-        JsonObject item; item.Text("name", value.name); item.Set("status", StatusS(value.status)); item.Set("exceeded", B(value.exceeded));
-        if (value.exceeded) { item.Text("path", value.path); item.Set("valueCount", std::to_string(value.valueCount)); item.Set("threshold", std::to_string(value.threshold)); }
+    root.Set("registryFindings", Array(r.registryFindings, [](const auto& value) {
+        JsonObject item; item.Text("name", value.name); item.Text("description", value.description); item.Text("path", value.path);
+        item.Set("status", StatusS(value.status)); item.Set("exceeded", B(value.exceeded));
+        item.Set("valueCount", std::to_string(value.valueCount)); item.Set("threshold", std::to_string(value.threshold));
         return item.Finish();
     }));
-    std::vector<DirectoryFinding> directories;
-    for (const auto& value : r.directoryFindings)
-        if (value.exceeded || (value.status != Status::Success && value.status != Status::NotFound)) directories.push_back(value);
-    root.Set("directoryFindings", Array(directories, [](const auto& value) {
-        JsonObject item; item.Text("name", value.name); item.Set("status", StatusS(value.status)); item.Set("exceeded", B(value.exceeded));
-        if (value.exceeded) { item.Text("path", value.path); item.Set("fileCount", std::to_string(value.fileCount)); item.Set("threshold", std::to_string(value.threshold)); }
+    root.Set("directoryFindings", Array(r.directoryFindings, [](const auto& value) {
+        JsonObject item; item.Text("name", value.name); item.Text("description", value.description); item.Text("path", value.path);
+        item.Set("status", StatusS(value.status)); item.Set("exceeded", B(value.exceeded));
+        item.Set("fileCount", std::to_string(value.fileCount)); item.Set("threshold", std::to_string(value.threshold));
         return item.Finish();
     }));
     JsonObject score;

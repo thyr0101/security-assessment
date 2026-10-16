@@ -51,6 +51,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\Warnings.cpp" />
+    <ClCompile Include="src\Collectors\ServiceCollector.cpp" />
     <ClCompile Include="src\Utilities.cpp" />
     <ClCompile Include="src\WmiHelper.cpp" />
     <ClCompile Include="src\RegistryReader.cpp" />
@@ -63,7 +65,7 @@
     <ClCompile Include="src\Collectors\NetworkCollector.cpp" />
     <ClCompile Include="src\Collectors\HardeningCollector.cpp" />
     <ClCompile Include="src\Collectors\StorageCollector.cpp" />
-    <ClCompile Include="src\Collectors\PersistenceCollector.cpp" />
+    <ClCompile Include="src\Collectors\ThresholdCollector.cpp" />
     <ClCompile Include="src\Collectors\WindowsUpdateCollector.cpp" />
     <ClCompile Include="src\Security\ScoreEngine.cpp" />
     <ClCompile Include="src\Output\ConsoleRenderer.cpp" />
@@ -73,6 +75,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\Common.h" />
+    <ClInclude Include="src\Warnings.h" />
+    <ClInclude Include="src\Collectors\ServiceCollector.h" />
+    <ClInclude Include="src\SettingsNavigation.h" />
     <ClInclude Include="src\ComHelpers.h" />
     <ClInclude Include="src\CollectionTimer.h" />
     <ClInclude Include="src\Utilities.h" />
@@ -88,7 +93,7 @@
     <ClInclude Include="src\Collectors\NetworkCollector.h" />
     <ClInclude Include="src\Collectors\HardeningCollector.h" />
     <ClInclude Include="src\Collectors\StorageCollector.h" />
-    <ClInclude Include="src\Collectors\PersistenceCollector.h" />
+    <ClInclude Include="src\Collectors\ThresholdCollector.h" />
     <ClInclude Include="src\Collectors\WindowsUpdateCollector.h" />
     <ClInclude Include="src\Security\ScoreEngine.h" />
     <ClInclude Include="src\Output\ConsoleRenderer.h" />

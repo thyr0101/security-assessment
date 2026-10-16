@@ -1,4 +1,5 @@
 #include "DefenderCollector.h"
+#include "../Warnings.h"
 #include "../WmiHelper.h"
 #include <comdef.h>
 #include <wrl/client.h>
@@ -82,7 +83,7 @@ DefenderInfo CollectDefenderInfo(bool registrationOnly) {
 
     if (!gotStatus) {
         d.status = Status::Unavailable;
-        d.reason = L"Defender status could not be read: " + (why.empty() ? std::wstring(L"No supported status properties were available.") : why);
+        d.reason = std::wstring(warnings::defenderQueryPrefix) + (why.empty() ? std::wstring(warnings::defenderSchemaUnavailable) : why);
         return d;
     }
 

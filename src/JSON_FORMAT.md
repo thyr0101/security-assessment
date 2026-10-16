@@ -31,7 +31,9 @@ New exports use numbered fields with their actual values directly beside them. T
 
 `enabled` is Boolean for UAC, Defender and firewall profiles (and for the reserved TPM field in older backups); it is tri-state for Secure Boot and general security settings. Text arrays contain actual strings, and numeric arrays such as disk indexes retain actual numbers. Native JSON booleans are not used in `d`.
 
-Exports contain only console display inputs and recorded rule results. Hidden inventories, raw scoring-only evidence, provenance strings, rule reasons and non-exceeded successful threshold scans are omitted. Warnings and application inventory are not exported. The backup viewer displays a stale-data notice and disables warnings. Scores are restored without rescoring. Input is limited to 64 MiB, nesting to 128 levels, expanded JSON to 128 MiB. Unknown keys and invalid state codes are rejected. Terminal control characters are escaped for display after import.
+Exports contain only console display inputs and recorded rule results. Hidden inventories, raw scoring-only evidence, provenance strings and rule reasons are omitted. All displayed threshold records are included, with descriptions, paths and counts even below their review thresholds. Warnings and application inventory are not exported. The backup viewer displays a stale-data notice and disables warnings. Scores are restored without rescoring. Input is limited to 64 MiB, nesting to 128 levels, expanded JSON to 128 MiB. Unknown keys and invalid state codes are rejected. Terminal control characters are escaped for display after import.
+
+In new assessments with third-party antivirus registrations, Defender's per-product maximum and award are zero and the viewer labels it Not scored. Disabled third-party products retain a maximum of 180 and an award of zero. Older backups retain their recorded total and rules. Threshold descriptions reuse field ID `156` (`description`); no field IDs have changed.
 
 ## Previous compact backups
 

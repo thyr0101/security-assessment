@@ -1,6 +1,8 @@
 """Run native regressions and parse real reports using only Python's standard library."""
 import argparse
 import json
+import re
+import unicodedata
 from pathlib import Path
 import subprocess
 import tempfile
@@ -122,7 +124,7 @@ def main():
         partial = json.loads((Path(scratch) / 'partial-output.json').read_text(encoding='utf-8'))
         assert partial['defender']['cloudProtectionStatus'] == 'Success'
         assert partial['defender']['realTimeProtectionStatus'] == 'Unavailable'
-        assert next(r for r in partial['score']['rules'] if r['id'] == 'hyg.startup')['state'] == 'Unknown'
+        assert all(r['id'] != 'hyg.startup' for r in partial['score']['rules'])
         updates = json.loads((Path(scratch) / 'windows-update-output.json').read_text(encoding='utf-8'))
         assert updates['windowsUpdate']['pendingStatus'] == 'Success'
         assert updates['windowsUpdate']['updates'][0]['title'] == 'Pending "Windows" update'
@@ -136,8 +138,21 @@ def main():
         unknown_updates = json.loads((Path(scratch) / 'windows-update-unknown.json').read_text(encoding='utf-8'))
         assert unknown_updates['windowsUpdate']['pendingStatus'] != 'Success'
         assert 'pendingCount' not in unknown_updates['windowsUpdate']
+        for width in (40, 80, 120):
+            styled = (Path(scratch) / f'layout-{width}.txt').read_text(encoding='utf-8')
+            plain = re.sub(r'\x1b\]8;;[^\x1b]*\x1b\\|\x1b\[[0-9;]*m', '', styled)
+            assert '\x1b' not in plain
+            for line in plain.splitlines():
+                if line.startswith('  \u2502') or line.startswith('  \u250c') or line.startswith('  \u2514'):
+                    cells = sum(0 if unicodedata.combining(c) else 2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1 for c in line)
+                    assert cells == width - 1, (width, cells, line)
+            assert plain.count('X') >= 170 and 'Settings' in plain
         print(output.strip())
 
+    pages, _ = run(app, '--settings')
+    assert 'system - System / About' in pages and 'update - Windows Update' in pages
+    invalid_page = subprocess.run([str(app), '--settings', 'https://example.com'], capture_output=True, timeout=10)
+    assert invalid_page.returncode == 2
     help_text, _ = run(app, '--help')
     assert 'Usage:' in help_text
     invalid = subprocess.run([str(app), '--no-hahs'], capture_output=True, timeout=10)
@@ -153,12 +168,13 @@ def main():
     assert ('periodicScanning' in report['defender']) == any(not p['isDefender'] for p in products)
     assert len(products) == len(report['score'].get('antivirusScores', []))
     for product, score in zip(products, report['score'].get('antivirusScores', [])):
-        assert score['maxPoints'] == 180
-        assert score['awardedPoints'] == (180 if product['status'] == 'Success' and product['state'] == 'Enabled' else 0)
+        excluded = product['isDefender'] and any(not p['isDefender'] for p in products)
+        assert score['maxPoints'] == (0 if excluded else 180)
+        assert score['awardedPoints'] == (180 if not excluded and product['status'] == 'Success' and product['state'] == 'Enabled' else 0)
     rules = {rule['id']: rule for rule in report['score']['rules']}
     assert 'os.patch' not in rules and 'wu.pending' not in rules
     assert sum(rule['maxPoints'] for rule in rules.values() if rule['category'] == 'Windows Update') == 60
-    assert all(r['maxPoints'] or r['id'] == 'hyg.startup' for r in rules.values())
+    assert all(r['maxPoints'] for r in rules.values())
     assert_no_hidden_fields(report)
     assert rules['os.sac']['maxPoints'] == 50
     if rules['os.sac']['state'] == 'Evaluation':
@@ -184,6 +200,8 @@ def main():
     assert 'applications' not in normal
     console, _ = run(app, '--no-hash')
     assert 'SECURITY SCORE' in console and '\x1b[' not in console
+    assert 'Inventory Coverage' not in console
+    assert ('[!] LIMITED ACCESS' in console) == (not report['security']['elevated'])
     assert 'BACKUP REPORT' not in console and '-- Applications' not in console
     assert 'Windows update details available' not in console
     assert console.index('Rule breakdown') < console.index('SECURITY SCORE') < console.index('+- Warnings')

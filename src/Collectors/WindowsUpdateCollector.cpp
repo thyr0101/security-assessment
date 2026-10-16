@@ -1,6 +1,7 @@
 #include "WindowsUpdateCollector.h"
+#include "../Warnings.h"
 #include "../ComHelpers.h"
-#include "PersistenceCollector.h"
+#include "ServiceCollector.h"
 #include <wuapi.h>
 #include <comdef.h>
 #include <wrl.h>
@@ -18,7 +19,7 @@ using Microsoft::WRL::ComPtr;
 void PendingFailure(WindowsUpdateInfo& info, HRESULT hr, const wchar_t* operation) {
     if (SUCCEEDED(hr)) hr = E_UNEXPECTED;
     info.pendingStatus = ComStatus(hr);
-    info.pendingReason = std::wstring(operation) + L" failed (" + ErrorCode(hr) + L").";
+    info.pendingReason = warnings::ProviderFailure(operation, ErrorCode(hr));
 }
 
 void ReadUpdateTypes(IUpdate* update, WindowsUpdateItem& item) {
@@ -123,7 +124,7 @@ void ReadPending(IUpdateSearcher* searcher, WindowsUpdateInfo& info) {
         // completion stays safe. CleanUp would wait without a timeout here.
         PendingFailure(info, hr, L"Local update search wait");
         if (hr == RPC_S_CALLPENDING)
-            info.pendingReason = L"Local update search timed out after 45 seconds; pending updates are unknown.";
+            info.pendingReason = warnings::updateSearchTimeout;
         return;
     }
     ComPtr<ISearchResult> result;
@@ -183,7 +184,7 @@ WindowsUpdateInfo CollectWindowsUpdateInfo() {
     WindowsUpdateInfo info;
     info.services = CollectServices({L"wuauserv", L"BITS", L"UsoSvc", L"WaaSMedicSvc", L"DoSvc", L"CryptSvc", L"TrustedInstaller"});
     ComInit com;
-    if (!com.ok()) { info.pendingReason = L"COM initialization failed."; return info; }
+    if (!com.ok()) { info.pendingReason = warnings::comUnavailable; return info; }
     ReadRebootState(info);
     ComPtr<IUpdateSession> session;
     HRESULT hr = ::CoCreateInstance(__uuidof(UpdateSession), nullptr, CLSCTX_INPROC_SERVER,

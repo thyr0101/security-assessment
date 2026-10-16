@@ -8,6 +8,7 @@
 #include <thread>
 #include <optional>
 #include "Common.h"
+#include "SettingsNavigation.h"
 #include "CollectionTimer.h"
 #include "Utilities.h"
 #include "Collectors/SystemCollector.h"
@@ -19,7 +20,7 @@
 #include "Collectors/NetworkCollector.h"
 #include "Collectors/HardeningCollector.h"
 #include "Collectors/StorageCollector.h"
-#include "Collectors/PersistenceCollector.h"
+#include "Collectors/ThresholdCollector.h"
 #include "Collectors/WindowsUpdateCollector.h"
 #include "Security/ScoreEngine.h"
 #include "Output/ConsoleRenderer.h"
@@ -35,8 +36,22 @@ int wmain(int argc, wchar_t** argv) {
         ~ConsoleCodePage() { if (changed) ::SetConsoleOutputCP(original); }
     } consoleCodePage;
 
+    // Explicit navigation never collects machine data or accepts arbitrary URIs.
+    if (argc >= 2 && std::wstring_view(argv[1]) == L"--settings") {
+        if (argc == 2) {
+            for (const auto& page : settingsPages) std::wcout << page.id << L" - " << page.title << L"\n";
+            return 0;
+        }
+        if (argc != 3) { std::wcerr << L"Usage: SecurityAssessment --settings [page]\n"; return 2; }
+        const auto* page = FindSettingsPage(argv[2]);
+        if (!page) { std::wcerr << L"Unknown Settings page. Use --settings to list pages.\n"; return 2; }
+        if (!OpenSettingsPage(*page)) { std::wcerr << L"Windows could not open this Settings page.\n"; return 1; }
+        return 0;
+    }
+
     constexpr auto usage = L"Usage: SecurityAssessment [--json [0|1] [output-file]]\n"
         L"       SecurityAssessment --json view <compact-report-file>\n"
+        L"       SecurityAssessment --settings [page]\n"
         L"       0 = compact (viewable); 1 = readable text (not viewable). Omit to choose interactively.\n";
     bool json = false, viewJson = false, noHash = false;
     std::filesystem::path jsonPath;
@@ -162,10 +177,6 @@ int wmain(int argc, wchar_t** argv) {
         },
         [](AssessmentResult& r) {
             try { r.directoryFindings = Timed(L"directoryFindings", [&] { return RunDirectoryScans(DefaultDirectoryScans()); }); }
-            catch (...) {}
-        },
-        [](AssessmentResult& r) {
-            try { r.persistence = Timed(L"persistence", [&] { return CollectPersistence(); }); }
             catch (...) {}
         }
     };

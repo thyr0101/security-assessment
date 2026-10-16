@@ -1,4 +1,5 @@
 #include "AntivirusCollector.h"
+#include "../Warnings.h"
 #include "../ComHelpers.h"
 #include <iwscapi.h>
 #include <wscapi.h>
@@ -16,7 +17,7 @@ using Microsoft::WRL::ComPtr;
 
 void Failure(AntivirusInfo& info, HRESULT hr, const wchar_t* operation) {
     info.status = ComStatus(hr);
-    info.reason = std::wstring(operation) + L" failed (" + ErrorCode(hr) + L").";
+    info.reason = warnings::ProviderFailure(operation, ErrorCode(hr));
 }
 
 bool IsDefender(const std::wstring& id, const std::wstring& name, const std::wstring& remediation) {
@@ -31,7 +32,7 @@ bool IsDefender(const std::wstring& id, const std::wstring& name, const std::wst
 AntivirusInfo CollectAntivirusInfo() {
     AntivirusInfo info;
     ComInit com;
-    if (!com.ok()) { info.reason = L"COM initialization failed."; return info; }
+    if (!com.ok()) { info.reason = warnings::comUnavailable; return info; }
 
     ComPtr<IWSCProductList> list;
     HRESULT hr = ::CoCreateInstance(__uuidof(WSCProductList), nullptr, CLSCTX_INPROC_SERVER,
@@ -77,7 +78,7 @@ AntivirusInfo CollectAntivirusInfo() {
         entry.status = SUCCEEDED(hr) && entry.state != AntivirusState::Unknown ? Status::Success : ComStatus(hr);
         if (entry.status != Status::Success || FAILED(nameStatus)) {
             info.status = Status::Unavailable;
-            info.reason = L"Some registered antivirus details could not be read.";
+            info.reason = warnings::antivirusPartial;
         }
         WSC_SECURITY_SIGNATURE_STATUS signature{};
         if (SUCCEEDED(product->get_SignatureStatus(&signature))) {

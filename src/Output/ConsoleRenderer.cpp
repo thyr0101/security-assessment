@@ -8,7 +8,8 @@ namespace sa {
 void console_detail::ConsoleLayout::Render(const AssessmentResult& r, ReportView view) {
 
     Banner(L"Windows Security Assessment");
-    if (view == ReportView::Export) BackupWarning();
+    if (view == ReportView::Export) Notice(warnings::backupTitle, warnings::backup);
+    else if (!r.security.isElevated) Notice(warnings::nonAdminTitle, warnings::nonAdmin);
 
     // ------------------------------------------------------------ System
     Section(L"System");
@@ -80,7 +81,7 @@ void console_detail::ConsoleLayout::Render(const AssessmentResult& r, ReportView
            periodic == Tri::Unknown ? Yel() : Wht());
         KV(L"Scoring", L"Periodic scanning is informational only", Dim());
         if (periodic == Tri::Unknown)
-            KV(L"Periodic scan note", L"Defender did not report a recognized running mode.", Yel());
+            KV(L"Periodic scan note", warnings::periodicUnknown, Yel());
     }
     if (!r.defender.reason.empty())
         KV(L"Note", r.defender.reason, Yel());
@@ -94,7 +95,9 @@ void console_detail::ConsoleLayout::Render(const AssessmentResult& r, ReportView
             SubHeader(av.name, known ? ToW(av.state) : L"Unknown", enabled ? Grn() : known ? Red() : Yel());
             if (i < r.score.antivirusScores.size()) {
                 const auto& score = r.score.antivirusScores[i];
-                KV(L"Antivirus score", Num(score.awardedPoints) + L" / " + Num(score.maxPoints),
+                if (HasThirdPartyAntivirus(r.antivirus) && av.isDefender)
+                    KV(L"Antivirus score", warnings::defenderExcluded, Dim());
+                else KV(L"Antivirus score", Num(score.awardedPoints) + L" / " + Num(score.maxPoints),
                    OutcomeColor(score.awardedPoints, score.maxPoints));
             }
             KV(L"Signatures current", ToW(av.signaturesUpToDate));
@@ -259,7 +262,7 @@ void console_detail::ConsoleLayout::Render(const AssessmentResult& r, ReportView
         }
         out() << L"\n" << Dim() << indent << L"BitLocker "
               << (v.bitLockerState == L"On" ? Grn() : v.bitLockerState == L"Off" ? Red() : Yel())
-              << v.bitLockerState << Rst();
+              << v.bitLockerState << Rst() << Button(L"BitLocker");
         if (!v.encryptionMethod.empty()) out() << Dim() << L"  |  Encryption " << Cyn() << v.encryptionMethod << Rst();
         if (v.diskIndices.size() > 1) {
             out() << Dim() << L"  |  Spans ";
@@ -302,43 +305,27 @@ void console_detail::ConsoleLayout::Render(const AssessmentResult& r, ReportView
     for (size_t i = 0; i < unmapped.size(); ++i) renderVolume(*unmapped[i], i + 1 == unmapped.size());
     if (indices.empty() && unmapped.empty()) KV(L"Storage query", ToW(r.storage.status), Yel());
 
-    Section(L"Inventory Coverage (informational)");
-    for (const auto& rule : r.score.rules)
-        if (rule.id == "hyg.startup")
-            KV(Utf8ToWide(rule.description).c_str(), Utf8ToWide(rule.state), rule.state == "Unknown" ? Yel() : Cyn());
-
     // ------------------------------------------------------------ Threshold findings
     Section(L"Threshold Findings");
+    Paragraph(warnings::thresholdScope, 2, Dim());
     SubHeader(L"Registry", L"", Dim());
-    bool anyReg = false;
-    for (auto& f : r.registryFindings) {
-        if (f.status != Status::Success && f.status != Status::NotFound) {
-            anyReg = true;
-            KV(f.name.c_str(), ToW(f.status), Yel());
-        }
-        if (f.exceeded) {
-            anyReg = true;
-            out() << L"  " << Yel() << L"[!] " << Rst() << Bold() << f.name << Rst() << L": " << f.path
-                  << L" contains " << f.valueCount << L" values (threshold: "
-                  << f.threshold << L")\n";
-        }
+    for (const auto& f : r.registryFindings) {
+        SubHeader(f.name, f.status == Status::Success ? Num(f.valueCount) + L" / " + Num(f.threshold) + L" values" : ToW(f.status),
+            f.exceeded ? Yel() : f.status == Status::Success || f.status == Status::NotFound ? Cyn() : Yel());
+        KV(L"Key", f.path, Dim());
+        if (!f.description.empty()) Paragraph(f.description, 4, Dim());
+        if (f.exceeded) KV(L"Review", warnings::thresholdReview, Yel());
     }
-    if (!anyReg) out() << L"  " << Grn() << L"none exceeded" << Rst() << L"\n";
-
+    if (r.registryFindings.empty()) KV(L"Registry scans", L"No recorded results", Dim());
     SubHeader(L"Directories", L"", Dim());
-    bool anyDir = false;
-    for (auto& f : r.directoryFindings) {
-        if (f.status != Status::Success && f.status != Status::NotFound) {
-            anyDir = true;
-            KV(f.name.c_str(), ToW(f.status), Yel());
-        }
-        if (f.exceeded) {
-            anyDir = true;
-            out() << L"  " << Yel() << L"[!] " << Rst() << f.path << L" contains " << f.fileCount
-                  << L" files (threshold: " << f.threshold << L")\n";
-        }
+    for (const auto& f : r.directoryFindings) {
+        SubHeader(f.name, f.status == Status::Success ? Num(f.fileCount) + L" / " + Num(f.threshold) + L" files" : ToW(f.status),
+            f.exceeded ? Yel() : f.status == Status::Success || f.status == Status::NotFound ? Cyn() : Yel());
+        KV(L"Directory", f.path, Dim());
+        if (!f.description.empty()) Paragraph(f.description, 4, Dim());
+        if (f.exceeded) KV(L"Review", warnings::thresholdReview, Yel());
     }
-    if (!anyDir) out() << L"  " << Grn() << L"none exceeded" << Rst() << L"\n";
+    if (r.directoryFindings.empty()) KV(L"Directory scans", L"No recorded results", Dim());
 
     // ------------------------------------------------------------ Rule breakdown
     Section(L"Rule breakdown (awarded / max)");
@@ -391,8 +378,8 @@ void console_detail::ConsoleLayout::Render(const AssessmentResult& r, ReportView
 
     Section(L"Warnings");
     if (view == ReportView::Export)
-        KV(L"Findings", L"Warnings are disabled when viewing an export", Dim());
-    else if (r.score.warnings.empty()) KV(L"Findings", L"No warnings from the evaluated checks.", Grn());
+        KV(L"Findings", warnings::exported, Dim());
+    else if (r.score.warnings.empty()) KV(L"Findings", warnings::clear, Grn());
     for (const auto severity : {Severity::Critical, Severity::High, Severity::Medium, Severity::Low}) {
         if (view == ReportView::Export) break;
         const auto count = std::ranges::count(r.score.warnings, severity, &SecurityWarning::severity);
@@ -402,16 +389,17 @@ void console_detail::ConsoleLayout::Render(const AssessmentResult& r, ReportView
         for (const auto& warning : r.score.warnings) {
             if (warning.severity != severity) continue;
             out() << L"    " << color << L"[!] " << Bold() << Utf8ToWide(warning.title) << Rst();
-            if (warning.verificationOnly) out() << Dim() << L" (verification gap)" << Rst();
+            if (warning.verificationOnly) out() << Dim() << warnings::verificationGap << Rst();
             out() << L"\n";
             Paragraph(Utf8ToWide(warning.detail), 8, Dim());
-            Paragraph(L"Action: " + Utf8ToWide(warning.recommendation), 8, color);
+            Paragraph(std::wstring(warnings::action) + Utf8ToWide(warning.recommendation), 8, color);
         }
     }
 
     EndSection();
+    if (console_) out() << L"\n  " << Dim() << warnings::settingsHint << Rst() << L"\n";
     out() << L"\n  " << Dim()
-          << L"This is a hardening posture score. It does not guarantee security."
+          << warnings::disclaimer
           << Rst() << L"\n";
 }
 

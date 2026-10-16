@@ -4,12 +4,16 @@
 #include "Collectors/DefenderCollector.h"
 #include <ranges>
 #include <algorithm>
-#include "Collectors/PersistenceCollector.h"
+#include "Collectors/ThresholdCollector.h"
+#include "Collectors/ServiceCollector.h"
 #include "Output/JsonRenderer.h"
 #include "Output/JsonFile.h"
 #include "Output/JsonCompact.h"
 #include "Output/ConsoleRenderer.h"
+#include "Output/ConsoleLayout.h"
 #include "Security/ScoreEngine.h"
+#include "Warnings.h"
+#include "SettingsNavigation.h"
 #include "WmiHelper.h"
 #include <comdef.h>
 #include <wrl/client.h>
@@ -136,7 +140,6 @@ static void TestScoreAndJson() {
     volume.bitLockerStatus = Status::Success;
     result.storage.status = Status::Success;
     result.storage.volumes.push_back(volume);
-    result.persistence.status = Status::Success;
     result.network.status = Status::Success;
     for (auto* setting : {&result.network.smb1Server, &result.network.smb1Client,
                           &result.network.smbGuestLogons, &result.network.llmnr, &result.network.rdp}) {
@@ -179,7 +182,7 @@ static void TestScoreAndJson() {
     d.threatsCount = 0;
     for (const auto* id : {"hw.tpm2", "hw.vbs", "hw.hvci", "os.win11",
                            "mp.defender", "mp.threats", "net.in", "net.svc", "enc.bl", "enc.tpm",
-                           "acc.uac2", "hyg.startup"}) {
+                           "acc.uac2"}) {
         Check(Rule(healthy, id).state != "Enabled", "capabilities, facts, and scan results do not use Enabled");
     }
     int sum = 0; for (const auto& rule : healthy.rules) sum += rule.awardedPoints;
@@ -406,6 +409,7 @@ static void TestRegisteredAntivirus() {
     result.score = ComputeScore(result);
     Check(result.score.registeredAntivirusScoring, "third-party AV selects registration scoring");
     Check(result.score.total == 180 && result.score.maximum == 1000, "enabled third-party AV earns malware section only");
+    Check(result.score.antivirusScores[2].maxPoints == 0, "Defender is informational in registered mode");
     Check(result.score.antivirusScores.size() == 3 && result.score.antivirusScores[0].awardedPoints == 180 &&
           result.score.antivirusScores[1].awardedPoints == 0 && result.score.antivirusScores[2].awardedPoints == 0,
           "independent product scores when Defender is inactive");
@@ -419,11 +423,27 @@ static void TestRegisteredAntivirus() {
           "console names both third-party products");
     Check(captured.str().find(L"180 / 180") != std::wstring::npos && captured.str().find(L"0 / 180") != std::wstring::npos,
           "console shows each antivirus score");
+    Check(captured.str().find(warnings::defenderExcluded) != std::wstring::npos, "console explicitly excludes Defender from scoring");
     Check(captured.str().find(L"Periodic scanning") != std::wstring::npos && captured.str().find(L"Real-Time") == std::wstring::npos,
           "fallback replaces inactive Defender detail and shows periodic scanning");
     for (Tri periodic : {Tri::No, Tri::Yes, Tri::Unknown}) {
         result.defender.periodicScanning = periodic;
         Check(ComputeScore(result).total == 180, "periodic scanning must never affect score");
+    }
+    for (const auto avState : {AntivirusState::Enabled, AntivirusState::Disabled, AntivirusState::Unknown}) {
+        for (const auto defenderState : {AntivirusState::Enabled, AntivirusState::Disabled, AntivirusState::Unknown}) {
+            auto sample = result;
+            sample.antivirus.products[0].state = avState;
+            sample.antivirus.products[2].state = defenderState;
+            sample.defender.enabled = defenderState == AntivirusState::Enabled;
+            const auto computed = ComputeScore(sample);
+            Check(computed.antivirusScores[2].maxPoints == 0 && computed.antivirusScores[2].awardedPoints == 0,
+                  "Defender excluded regardless of either product's state");
+            Check(computed.total == (avState == AntivirusState::Enabled ? 180 : 0),
+                  "only third-party protection determines registered category credit");
+            Check(std::ranges::none_of(computed.rules, [](const auto& r) { return r.id == "mp.rtp" || r.id == "mp.defender"; }),
+                  "no separate Defender real-time penalty with a third-party registration");
+        }
     }
     result.antivirus.products[1].state = AntivirusState::Enabled;
     auto both = ComputeScore(result);
@@ -465,6 +485,52 @@ static std::wstring CaptureConsole(const AssessmentResult& result, ReportView vi
     std::wcout.rdbuf(original);
     return captured.str();
 }
+static void TestNoticesAndNavigation(Fixture& fixture) {
+    AssessmentResult result;
+    result.score = ComputeScore(result);
+    const auto live = CaptureConsole(result);
+    Check(live.find(warnings::nonAdminTitle) < live.find(L"+- System"), "limited-access notice precedes System");
+    Check(live.find(L"Inventory Coverage") == std::wstring::npos &&
+          std::ranges::none_of(result.score.rules, [](const auto& rule) { return rule.id == "hyg.startup"; }),
+          "removed coverage is neither collected nor scored");
+    result.security.isElevated = true;
+    Check(CaptureConsole(result).find(warnings::nonAdminTitle) == std::wstring::npos, "administrator report has no limited-access notice");
+    Check(CaptureConsole(result, ReportView::Export).find(warnings::nonAdminTitle) == std::wstring::npos,
+          "backup never uses recorded elevation to claim the viewing process is non-admin");
+    for (const auto label : {L"System", L"Microsoft Defender", L"Windows Update", L"Network Security", L"Storage", L"Remote Desktop"})
+        Check(SettingsFor(label) && std::wstring_view(SettingsFor(label)->uri).starts_with(L"ms-settings:"), "settings mapping is fixed and local");
+    Check(!FindSettingsPage(L"https://example.com") && !SettingsFor(L"UNTRUSTED_IMPORT"), "file labels cannot select arbitrary URIs");
+    for (const size_t columns : {size_t{40}, size_t{80}, size_t{120}}) {
+        auto sample = result;
+        sample.os.productName = std::wstring(170, L'X');
+        sample.cpu.brand = L"CPU \u6d4b\u8bd5 \U0001f512 combining e\u0301";
+        std::wostringstream captured;
+        auto* original = std::wcout.rdbuf(captured.rdbuf());
+        try {
+            console_detail::ConsoleLayout layout(columns, true, true);
+            layout.Render(sample, ReportView::Export);
+        } catch (...) { std::wcout.rdbuf(original); throw; }
+        std::wcout.rdbuf(original);
+        Check(captured.str().find(L"\x1b]8;;ms-settings:about\x1b\\") != std::wstring::npos,
+              "Settings buttons emit fixed OSC 8 URIs");
+        Check(captured.str().find(L"UNTRUSTED_IMPORT") == std::wstring::npos, "no file-provided navigation");
+        std::ofstream("layout-" + std::to_string(columns) + ".txt", std::ios::binary) << WideToUtf8(captured.str());
+    }
+    for (const auto& definition : DefaultRegistryScans()) Check(!definition.description.empty(), "every registry scan has a description");
+    for (const auto& definition : DefaultDirectoryScans()) Check(!definition.description.empty(), "every directory scan has a description");
+    const auto scans = RunDirectoryScans({{L"first", fixture.dir.wstring(), 0, false, L"Description sentinel"},
+        {L"duplicate", (fixture.dir / L".").wstring(), 0, false, L"Duplicate"}});
+    Check(scans.size() == 1 && scans[0].description == L"Description sentinel", "normalized duplicate directories are scanned once");
+    result.directoryFindings = scans;
+    result.registryFindings = RunRegistryScans({{L"registry fixture", fixture.key.get(), L"", 99, 0, L"Registry description"}});
+    result.score = ComputeScore(result);
+    const auto path = fixture.dir / L"thresholds.json";
+    Check(SaveJsonReport(RenderJson(result, JsonFormat::Compact), path).has_value(), "save threshold fixture");
+    const auto restored = ReadJsonReport(path);
+    Check(restored && restored->registryFindings[0].description == L"Registry description" &&
+          restored->directoryFindings[0].description == L"Description sentinel", "all displayed threshold descriptions round-trip");
+}
+
 static void TestHardeningAndWarnings() {
     AssessmentResult result;
     auto score = ComputeScore(result);
@@ -684,6 +750,7 @@ int main() {
         TestRegisteredAntivirus();
         TestWindowsUpdate();
         TestPartialCollection();
+        TestNoticesAndNavigation(fixture);
         TestHardeningAndWarnings();
         TestJsonFiles(fixture);
         TestNetworkSignIn();

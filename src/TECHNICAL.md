@@ -34,7 +34,6 @@ All runtime dependencies are Windows components or the C++ runtime. No Python pa
 | `RegistryReader`, `WmiHelper`, `Utilities` | Native resource ownership, typed extraction and shared helpers. |
 | `Security/ScoreEngine` | Applies rules and totals weights. |
 | `Warnings.h`, `Warnings.cpp` | Central warning text, severity, recommendations and generation. |
-| `SettingsNavigation.h` | Fixed Settings-page mappings and explicit native URI launching. |
 | `Output/ConsoleRenderer`, `JsonRenderer` | Report composition and display snapshot selection. |
 | `Output/ConsoleLayout.h`, `JsonWriter.h` | Reusable box layout, colors, wrapping, JSON escaping and object/array helpers. |
 | `ComHelpers.h`, `CollectionTimer.h` | Shared COM string ownership/error formatting and optional collector tracing. |
@@ -67,7 +66,6 @@ Source references: [TPM Base Services](https://learn.microsoft.com/en-us/windows
 | Network Security | 200 | Firewall coverage 60, inbound defaults 20, firewall service 20; eight SMB/name-resolution/RDP checks at 10 each; modern sign-in policy 20. |
 | Encryption | 90 | BitLocker 50; TPM availability 40. |
 | Account Security | 120 | Admin permission prompt 20; secure desktop 25; Guest disabled 30; Remote Assistance invitations blocked 20; account lockout 25. |
-| Threshold findings | 0 | Registry and directory counts, descriptions and review thresholds are informational. |
 | **Total** | **1000** | |
 
 Removing the 20-point password-length rule reallocates five points each to secure desktop, Guest, Remote Assistance, and account lockout. Lockout with shorter-than-15-minute lock/reset windows receives 12 of 25 points; full credit requires 1-10 attempts with both windows at least 15 minutes. These are selected hardening thresholds, not compliance certification.
@@ -83,11 +81,9 @@ Stable IDs such as `net.ntlm` remain machine-facing identifiers; user-facing lab
 ```text
 SecurityAssessment [--json [0|1] [output-file]]
 SecurityAssessment --json view <report-file>
-SecurityAssessment --settings [page]
 ```
 
 - Default mode renders the console assessment. Non-admin live assessments show a limited-access notice above System. Backups show their stale-data notice without interpreting saved elevation as the current viewer's privileges.
-- `--settings` lists fixed page identifiers; `--settings <page>` opens one through `ShellExecuteW` without collection. Only compiled Settings URIs are used. Windows Terminal buttons use OSC 8 links; other interactive terminals show the command identifier. Redirected reports omit buttons. System uses `ms-settings:about`; controls without dedicated Settings URIs use the relevant parent page. Links never come from imported data. See [Microsoft's Settings URI reference](https://learn.microsoft.com/en-us/windows/apps/develop/launch/launch-settings) and [Windows Terminal hyperlink interaction](https://learn.microsoft.com/en-us/windows/terminal/tips-and-tricks#open-a-hyperlink).
 - `--json` prompts for mode 0 (compact and viewable) or 1 (descriptive JSON, not viewable) before collection. EOF without a choice exits with code 2. `--json 0 [file]` and `--json 1 [file]` bypass the prompt. Both modes run the assessment and create a UTF-8 file without a BOM. A generated `security-assessment-YYYYMMDD-HHMMSS-mmm-PID.json` filename uses the system's local clock and current folder.
 - An explicit destination is resolved from the current folder. Parents must exist. `CREATE_NEW` prevents replacement of existing files, including links. Writes are exclusive and flushed before success is reported; failed writes mark the owned handle for deletion where possible.
 - Export prints only a confirmation/path. It no longer emits JSON on stdout. This intentionally changes the old CLI contract.
@@ -96,7 +92,7 @@ SecurityAssessment --settings [page]
 - `--no-hash` remains accepted as a legacy no-op for assessment scripts and cannot be combined with view mode. Application collection and executable hashing no longer run. Unexpected arguments and duplicate `--json` are rejected before collecting data.
 - Exit codes: 0 for success/help, 1 for file/runtime output errors, 2 for invalid arguments. The score does not control the exit code.
 
-Both JSON formats save a presentation snapshot: fields needed by the console and recorded rule states/points. They exclude adapter/address/listener inventory, setting provenance strings, startup commands, general service inventory, unused hardware details, hidden update metadata and raw scoring evidence already represented by rule rows. All displayed threshold records, including descriptions, paths and successful counts, are exported. Native readings retain the statuses needed to reproduce the display. UAC secure-desktop and combined CPU virtualization availability are saved explicitly.
+Both JSON formats save a presentation snapshot: fields needed by the console and recorded rule states/points. They exclude adapter/address/listener inventory, setting provenance strings, startup commands, general service inventory, unused hardware details, hidden update metadata and raw scoring evidence already represented by rule rows. Threshold scan records are warning-only data and are not exported or restored from older backups. Native readings retain the statuses needed to reproduce the display. UAC secure-desktop and combined CPU virtualization availability are saved explicitly.
 
 Collectors obtain only displayed facts and evidence required by visible scored checks. RAM-module, CPU cache/clock, Windows Hello, startup-command and general service collection have been removed. Standalone startup-readability collection and `hyg.startup` are also removed. Threshold scans count startup registrations/files without opening commands or shortcut targets. Defender projects only supported properties required by the selected protection display; registered third-party antivirus mode skips Defender preference/threat queries. BitLocker, TPM and Device Guard queries also request only used properties.
 
@@ -114,7 +110,7 @@ Warnings are ordered Critical, High, Medium, Low and include context and a recom
 
 Registry scans use `RegQueryInfoKeyW`. Directory scans use `FindFirstFileExW`/`FindNextFileW` with `FindExInfoBasic`, reusing returned attributes instead of performing a separate query for each entry. Default scans count immediate files. Recursive custom scans skip directory reparse points and have a depth bound. Normalized duplicate path/mode pairs are scanned once. Startup paths use `SHGetKnownFolderPath`, with conventional environment-expanded paths as a fallback.
 
-Registry scope includes user/machine Run and RunOnce keys, 32-bit machine equivalents, StartupApproved records and MUI Cache. Directory scope includes temporary folders, top-level ProgramData and user/shared Startup folders. Every result has a description, path, count, threshold and read status. Missing/inaccessible locations are explicit. High counts are review heuristics, never a malware verdict or score deduction.
+Registry scope includes user/machine Run and RunOnce keys, 32-bit machine equivalents, StartupApproved records and MUI Cache. Directory scope includes temporary folders, top-level ProgramData and user/shared Startup folders. Every result has a description, path, count, threshold and read status. Only exceeded counts appear under Medium warnings; missing, inaccessible and below-threshold locations have no separate display. Partial counts above a threshold include their query status. High counts are review heuristics, never a malware verdict or score deduction. JSON export skips threshold scans and warning generation because warnings are not saved; normal collection and scoring remain unchanged.
 
 Edit `src/Warnings.h` and rebuild to change notices, warning context, severity mappings and recommendations. `Warnings.cpp` contains generation and grouping logic. Console notices and informational warning text come from the same catalog.
 
@@ -124,7 +120,7 @@ For the earlier layout change (`8a05452`), with the same MSVC v145 Release setti
 
 The size reduction primarily comes from removing general `std::format` machinery for a fixed filename and a simple string join. Integer display no longer constructs string streams. Collector dispatch uses function pointers instead of type-erased callbacks; disabled tracing avoids clock reads. Unused registry accessors and aggregate statuses were removed, while individual read statuses used by display/scoring remain intact. Shared helpers are in focused headers rather than duplicated in report/collector implementation files.
 
-That earlier layout change was built and inspected without rerunning automated tests. The subsequent antivirus/navigation/warnings/threshold update reruns Debug/Release regressions, live smoke checks, AddressSanitizer and MSVC static analysis, including provider-state matrices, privilege notices, threshold-description round trips and colored/hyperlink frame captures at 40/80/120 columns.
+That earlier layout change was built and inspected without rerunning automated tests. The current warning/layout cleanup is checked with Debug/Release regressions, live smoke checks, AddressSanitizer and MSVC static analysis, including provider-state matrices, privilege notices, Medium threshold warnings, legacy backup compatibility, removed CLI arguments and colored frame captures at 40/80/120 columns.
 
 ## Debugging and regression checks
 
@@ -137,7 +133,7 @@ python tests/smoke.py build-tests/Release
 
 Native fixtures use private temporary files and registry data. They cover parsing, ownership, rule boundaries, partial readings, score sums, antivirus fallback, hidden console fields, and JSON save/view behavior. Smoke checks cover file export, automatic filenames, compact viewer round trips, numeric states, readable-file rejection, interactive choices, no-overwrite behavior, invalid arguments, legacy CLI compatibility, removed application inventory, help, and redirected console output.
 
-Optional MSVC `/analyze` and AddressSanitizer builds can check static and memory errors. The earlier collection cleanup passed Debug/Release regressions, live non-admin smoke runs, static analysis and AddressSanitizer. Those results preceded the box-layout/helper changes; the subsequent antivirus/navigation update reruns these checks; elevated TPM/BitLocker provider collection was not run live. Synthetic tests cover how those provider results affect scoring.
+Optional MSVC `/analyze` and AddressSanitizer builds can check static and memory errors. The earlier collection cleanup passed Debug/Release regressions, live non-admin smoke runs, static analysis and AddressSanitizer. Those results preceded the box-layout/helper changes; the current warning/layout cleanup reruns these checks; elevated TPM/BitLocker provider collection was not run live. Synthetic tests cover how those provider results affect scoring.
 
 During the earlier collection cleanup, one same-machine comparison found compact exports decreased from 20,063 to 7,188 bytes (64.2%). Every scored rule state, award and weight matched the prior build (772/1000). Export sizes depend on pending updates and visible findings. Warm non-admin smoke exports took about 0.6–0.7 seconds; these individual runs are not a benchmark.
 

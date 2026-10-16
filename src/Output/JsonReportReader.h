@@ -338,24 +338,6 @@ inline AssessmentResult ReadReport(const Object& root) {
         object.Field(L"lockoutWindow", result.hardening.lockoutWindow);
         object.Field(L"lockoutStatus", result.hardening.lockoutStatus);
     }
-    root.Items(L"registryFindings", result.registryFindings, [](const Object& object, auto& item) {
-        object.Field(L"name", item.name);
-        object.Field(L"description", item.description);
-        object.Field(L"path", item.path);
-        object.Field(L"valueCount", item.valueCount);
-        object.Field(L"threshold", item.threshold);
-        object.Field(L"exceeded", item.exceeded);
-        object.Field(L"status", item.status);
-    });
-    root.Items(L"directoryFindings", result.directoryFindings, [](const Object& object, auto& item) {
-        object.Field(L"name", item.name);
-        object.Field(L"description", item.description);
-        object.Field(L"path", item.path);
-        object.Field(L"fileCount", item.fileCount);
-        object.Field(L"threshold", item.threshold);
-        object.Field(L"exceeded", item.exceeded);
-        object.Field(L"status", item.status);
-    });
     {
         const auto object = root.Child(L"score");
         object.Field(L"total", result.score.total);

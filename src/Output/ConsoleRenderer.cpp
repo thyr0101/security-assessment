@@ -1,4 +1,5 @@
 #include "ConsoleLayout.h"
+#include "../Warnings.h"
 #include <algorithm>
 #include <ranges>
 
@@ -262,7 +263,7 @@ void console_detail::ConsoleLayout::Render(const AssessmentResult& r, ReportView
         }
         out() << L"\n" << Dim() << indent << L"BitLocker "
               << (v.bitLockerState == L"On" ? Grn() : v.bitLockerState == L"Off" ? Red() : Yel())
-              << v.bitLockerState << Rst() << Button(L"BitLocker");
+              << v.bitLockerState << Rst();
         if (!v.encryptionMethod.empty()) out() << Dim() << L"  |  Encryption " << Cyn() << v.encryptionMethod << Rst();
         if (v.diskIndices.size() > 1) {
             out() << Dim() << L"  |  Spans ";
@@ -304,28 +305,6 @@ void console_detail::ConsoleLayout::Render(const AssessmentResult& r, ReportView
     if (!unmapped.empty()) SubHeader(L"Unmapped volumes", L"", Yel());
     for (size_t i = 0; i < unmapped.size(); ++i) renderVolume(*unmapped[i], i + 1 == unmapped.size());
     if (indices.empty() && unmapped.empty()) KV(L"Storage query", ToW(r.storage.status), Yel());
-
-    // ------------------------------------------------------------ Threshold findings
-    Section(L"Threshold Findings");
-    Paragraph(warnings::thresholdScope, 2, Dim());
-    SubHeader(L"Registry", L"", Dim());
-    for (const auto& f : r.registryFindings) {
-        SubHeader(f.name, f.status == Status::Success ? Num(f.valueCount) + L" / " + Num(f.threshold) + L" values" : ToW(f.status),
-            f.exceeded ? Yel() : f.status == Status::Success || f.status == Status::NotFound ? Cyn() : Yel());
-        KV(L"Key", f.path, Dim());
-        if (!f.description.empty()) Paragraph(f.description, 4, Dim());
-        if (f.exceeded) KV(L"Review", warnings::thresholdReview, Yel());
-    }
-    if (r.registryFindings.empty()) KV(L"Registry scans", L"No recorded results", Dim());
-    SubHeader(L"Directories", L"", Dim());
-    for (const auto& f : r.directoryFindings) {
-        SubHeader(f.name, f.status == Status::Success ? Num(f.fileCount) + L" / " + Num(f.threshold) + L" files" : ToW(f.status),
-            f.exceeded ? Yel() : f.status == Status::Success || f.status == Status::NotFound ? Cyn() : Yel());
-        KV(L"Directory", f.path, Dim());
-        if (!f.description.empty()) Paragraph(f.description, 4, Dim());
-        if (f.exceeded) KV(L"Review", warnings::thresholdReview, Yel());
-    }
-    if (r.directoryFindings.empty()) KV(L"Directory scans", L"No recorded results", Dim());
 
     // ------------------------------------------------------------ Rule breakdown
     Section(L"Rule breakdown (awarded / max)");
@@ -397,7 +376,6 @@ void console_detail::ConsoleLayout::Render(const AssessmentResult& r, ReportView
     }
 
     EndSection();
-    if (console_) out() << L"\n  " << Dim() << warnings::settingsHint << Rst() << L"\n";
     out() << L"\n  " << Dim()
           << warnings::disclaimer
           << Rst() << L"\n";

@@ -8,7 +8,6 @@
 #include <thread>
 #include <optional>
 #include "Common.h"
-#include "SettingsNavigation.h"
 #include "CollectionTimer.h"
 #include "Utilities.h"
 #include "Collectors/SystemCollector.h"
@@ -36,22 +35,8 @@ int wmain(int argc, wchar_t** argv) {
         ~ConsoleCodePage() { if (changed) ::SetConsoleOutputCP(original); }
     } consoleCodePage;
 
-    // Explicit navigation never collects machine data or accepts arbitrary URIs.
-    if (argc >= 2 && std::wstring_view(argv[1]) == L"--settings") {
-        if (argc == 2) {
-            for (const auto& page : settingsPages) std::wcout << page.id << L" - " << page.title << L"\n";
-            return 0;
-        }
-        if (argc != 3) { std::wcerr << L"Usage: SecurityAssessment --settings [page]\n"; return 2; }
-        const auto* page = FindSettingsPage(argv[2]);
-        if (!page) { std::wcerr << L"Unknown Settings page. Use --settings to list pages.\n"; return 2; }
-        if (!OpenSettingsPage(*page)) { std::wcerr << L"Windows could not open this Settings page.\n"; return 1; }
-        return 0;
-    }
-
     constexpr auto usage = L"Usage: SecurityAssessment [--json [0|1] [output-file]]\n"
         L"       SecurityAssessment --json view <compact-report-file>\n"
-        L"       SecurityAssessment --settings [page]\n"
         L"       0 = compact (viewable); 1 = readable text (not viewable). Omit to choose interactively.\n";
     bool json = false, viewJson = false, noHash = false;
     std::filesystem::path jsonPath;
@@ -126,56 +111,58 @@ int wmain(int argc, wchar_t** argv) {
     // Independent collectors write distinct result fields. Four COM-initialized
     // workers overlap provider waits while keeping output and scoring deterministic.
     // Start the slow update/antivirus providers first to reduce the final wait.
-    using CollectorTask = void (*)(AssessmentResult&);
+    using CollectorTask = void (*)(AssessmentResult&, bool);
     constexpr CollectorTask tasks[] = {
-        [](AssessmentResult& r) {
+        [](AssessmentResult& r, bool) {
             try { r.windowsUpdate = Timed(L"windowsUpdate", [&] { return CollectWindowsUpdateInfo(); }); }
             catch (...) { r.windowsUpdate.pendingStatus = Status::Error;
                               r.windowsUpdate.pendingReason = L"Windows Update collection failed."; }
         },
-        [](AssessmentResult& r) {
+        [](AssessmentResult& r, bool) {
             try { r.antivirus = Timed(L"antivirus", [&] { return CollectAntivirusInfo(); }); }
             catch (...) { r.antivirus.status = Status::Error; }
             try { r.defender = Timed(L"defender", [&] { return CollectDefenderInfo(HasThirdPartyAntivirus(r.antivirus)); }); }
             catch (...) { r.defender.status = Status::Error; }
         },
-        [](AssessmentResult& r) {
+        [](AssessmentResult& r, bool) {
             try { r.os = Timed(L"os", [&] { return CollectOsInfo(); }); }
             catch (...) { r.os.status = Status::Error; }
         },
-        [](AssessmentResult& r) {
+        [](AssessmentResult& r, bool) {
             try { r.cpu = Timed(L"cpu", [&] { return CollectCpuInfo(); }); }
             catch (...) { r.cpu.status = Status::Error; }
         },
-        [](AssessmentResult& r) {
+        [](AssessmentResult& r, bool) {
             try { r.memory = Timed(L"memory", [&] { return CollectMemoryInfo(); }); }
             catch (...) {}
         },
-        [](AssessmentResult& r) {
+        [](AssessmentResult& r, bool) {
             try { r.security = Timed(L"security", [&] { return CollectSecurityInfo(); }); }
             catch (...) { r.security.tpm.status = Status::Error; }
         },
-        [](AssessmentResult& r) {
+        [](AssessmentResult& r, bool) {
             try { r.firewall = Timed(L"firewall", [&] { return CollectFirewallInfo(); }); }
             catch (...) { r.firewall.status = Status::Error; }
         },
-        [](AssessmentResult& r) {
+        [](AssessmentResult& r, bool) {
             try { r.storage = Timed(L"storage", [&] { return CollectStorageInfo(); }); }
             catch (...) { r.storage.status = Status::Error; }
         },
-        [](AssessmentResult& r) {
+        [](AssessmentResult& r, bool) {
             try { r.network = Timed(L"network", [&] { return CollectNetworkInfo(); }); }
             catch (...) { r.network.status = Status::Error; }
         },
-        [](AssessmentResult& r) {
+        [](AssessmentResult& r, bool) {
             try { r.hardening = Timed(L"hardening", [&] { return CollectHardeningInfo(); }); }
             catch (...) {}
         },
-        [](AssessmentResult& r) {
+        [](AssessmentResult& r, bool includeWarnings) {
+            if (!includeWarnings) return;
             try { r.registryFindings = Timed(L"registryFindings", [&] { return RunRegistryScans(DefaultRegistryScans()); }); }
             catch (...) {}
         },
-        [](AssessmentResult& r) {
+        [](AssessmentResult& r, bool includeWarnings) {
+            if (!includeWarnings) return;
             try { r.directoryFindings = Timed(L"directoryFindings", [&] { return RunDirectoryScans(DefaultDirectoryScans()); }); }
             catch (...) {}
         }
@@ -185,7 +172,7 @@ int wmain(int argc, wchar_t** argv) {
         auto work = [&] {
             ComInit workerCom;
             for (size_t index; (index = next.fetch_add(1, std::memory_order_relaxed)) < std::size(tasks);)
-                tasks[index](r);
+                tasks[index](r, !json);
         };
         std::array<std::jthread, 3> workers;
         try {
@@ -196,7 +183,7 @@ int wmain(int argc, wchar_t** argv) {
         work();
     } // jthread joins before any collected fields are read for scoring/rendering.
 
-    try { r.score = Timed(L"score", [&] { return ComputeScore(r); }); }
+    try { r.score = Timed(L"score", [&] { return ComputeScore(r, !json); }); }
     catch (...) { r.score.total = 0; }
 
     if (json) {

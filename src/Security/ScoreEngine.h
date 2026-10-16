@@ -1,5 +1,5 @@
 #pragma once
 #include "../Models.h"
 namespace sa {
-ScoreReport ComputeScore(const AssessmentResult& r);
+ScoreReport ComputeScore(const AssessmentResult& r, bool includeWarnings = true);
 }

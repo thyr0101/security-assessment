@@ -1,7 +1,5 @@
 #pragma once
 #include "ConsoleRenderer.h"
-#include "../Warnings.h"
-#include "../SettingsNavigation.h"
 #include "../Utilities.h"
 #include <algorithm>
 #include <concepts>
@@ -21,17 +19,15 @@ public:
         const size_t columns = ::GetConsoleScreenBufferInfo(h_, &info)
             ? static_cast<size_t>((std::max)(12, int(info.srWindow.Right - info.srWindow.Left + 1))) : 100;
         width_ = columns - 7; // Leave margins, border and rightmost console cell.
-        console_ = ::GetConsoleMode(h_, &orig_) != FALSE;
+        const bool console = ::GetConsoleMode(h_, &orig_) != FALSE;
         wchar_t noColor[1]{};
-        if (!console_ || ::GetEnvironmentVariableW(L"NO_COLOR", noColor, 1)) return;
+        if (!console || ::GetEnvironmentVariableW(L"NO_COLOR", noColor, 1)) return;
         changed_ = ::SetConsoleMode(h_, orig_ | ENABLE_VIRTUAL_TERMINAL_PROCESSING) != FALSE;
         color_ = changed_;
-        wchar_t terminal[2]{};
-        hyperlinks_ = color_ && ::GetEnvironmentVariableW(L"WT_SESSION", terminal, 2) != 0;
     }
     // Explicit capabilities also support deterministic rendering into a capture.
-    ConsoleLayout(size_t columns, bool color, bool hyperlinks)
-        : console_(true), hyperlinks_(hyperlinks), width_((std::max)(size_t{12}, columns) - 7), color_(color) {}
+    ConsoleLayout(size_t columns, bool color)
+        : width_((std::max)(size_t{12}, columns) - 7), color_(color) {}
     ~ConsoleLayout() {
         // Render closes all sections explicitly, including the last one.
         if (changed_) ::SetConsoleMode(h_, orig_);
@@ -43,8 +39,6 @@ private:
     HANDLE h_ = nullptr;
     DWORD orig_ = 0;
     bool changed_ = false;
-    bool console_ = false;
-    bool hyperlinks_ = false;
     bool sectionOpen_ = false;
     bool sectionWarning_ = false;
     std::wstring sectionTitle_;
@@ -119,7 +113,7 @@ private:
         out() << Bold() << Cyn() << title << Rst() << L"\n";
     }
 
-    // The offline notice uses the same wrapping and borders, highlighted in red.
+    // Notices use the same wrapping and borders, highlighted in red.
     void Notice(const wchar_t* title, const wchar_t* message) {
         Section(title);
         sectionWarning_ = true;
@@ -127,23 +121,15 @@ private:
         EndSection();
     }
 
-    // Start a category; the previous category is flushed as one framed block.
-    std::wstring Button(std::wstring_view label) {
-        const auto* page = SettingsFor(label);
-        if (!page || !console_) return {};
-        if (hyperlinks_)
-            return L" \x1b]8;;" + std::wstring(page->uri) + L"\x1b\\" + Blu() + L"[Settings]" + Rst() + L"\x1b]8;;\x1b\\";
-        return L" [Settings: " + std::wstring(page->id) + L"]";
-    }
-
+    // Start a category; flush the previous category as one framed block.
     void Section(const wchar_t* title) {
         EndSection();
-        sectionTitle_ = title + Button(title);
+        sectionTitle_ = title;
         sectionOpen_ = true;
     }
 
     void SubHeader(const std::wstring& title, const std::wstring& right, const wchar_t* rightColor) {
-        out() << L"\n  " << Dim() << L"[+] " << Rst() << Bold() << Wht() << title << Rst() << Button(title);
+        out() << L"\n  " << Dim() << L"[+] " << Rst() << Bold() << Wht() << title << Rst();
         if (!right.empty()) out() << L"  " << rightColor << right << Rst();
         out() << L"\n";
     }
@@ -151,23 +137,23 @@ private:
     // Indented facts use a subtle dot; headings and trees show the hierarchy.
     void KV(const wchar_t* label, const std::wstring& value, const wchar_t* color = nullptr) {
         out() << L"    " << Dim() << GDot() << L" " << Lbl() << PadRight(std::wstring(label) + L" ", kLabel) << Rst()
-              << (color ? color : Wht()) << value << Rst() << Button(label) << L"\n";
+              << (color ? color : Wht()) << value << Rst() << L"\n";
     }
 
     // Pair short facts only when their full values fit; never truncate report data.
     void Pair(const wchar_t* first, const std::wstring& value, const wchar_t* second,
               const std::wstring& other, const wchar_t* color = nullptr, const wchar_t* otherColor = nullptr) {
         const size_t width = width_;
-        const size_t cell = (std::max)(kLabel, Columns(first) + 1) + Columns(value) + Columns(Button(first));
-        const size_t secondCell = (std::max)(kLabel, Columns(second) + 1) + Columns(other) + Columns(Button(second));
+        const size_t cell = (std::max)(kLabel, Columns(first) + 1) + Columns(value);
+        const size_t secondCell = (std::max)(kLabel, Columns(second) + 1) + Columns(other);
         const size_t column = (std::max)(size_t{46}, cell + 3);
         if (column + secondCell + 8 > width) {
             KV(first, value, color); KV(second, other, otherColor ? otherColor : color); return;
         }
         out() << L"    " << Dim() << GDot() << L" " << Lbl() << PadRight(std::wstring(first) + L" ", kLabel) << Rst()
-              << (color ? color : Wht()) << value << Rst() << Button(first) << std::wstring(column - cell, L' ')
+              << (color ? color : Wht()) << value << Rst() << std::wstring(column - cell, L' ')
               << Dim() << GDot() << L" " << Lbl() << PadRight(std::wstring(second) + L" ", kLabel) << Rst()
-              << (otherColor ? otherColor : color ? color : Wht()) << other << Rst() << Button(second) << L"\n";
+              << (otherColor ? otherColor : color ? color : Wht()) << other << Rst() << L"\n";
     }
 
     void Paragraph(std::wstring_view text, size_t indent, const wchar_t* color) {
@@ -220,16 +206,12 @@ private:
     }
 
 
-    // Skip our ANSI styles and fixed OSC 8 Settings links when measuring cells.
+    // Skip ANSI styles when measuring cells.
     static size_t EscapeLength(std::wstring_view text, size_t at) {
         if (text[at] != L'\x1b' || at + 1 >= text.size()) return 0;
         if (text[at + 1] == L'[') {
             const auto end = text.find(L'm', at + 2);
             return end == text.npos ? 0 : end - at + 1;
-        }
-        if (text.substr(at).starts_with(L"\x1b]8;;")) {
-            const auto end = text.find(L"\x1b\\", at + 5);
-            return end == text.npos ? 0 : end - at + 2;
         }
         return 0;
     }
@@ -267,7 +249,7 @@ private:
     }
     void Rows(std::wstring_view text) {
         const auto vertical = color_ ? L"\u2502" : L"|";
-        std::wstring active, link;
+        std::wstring active;
         const auto leading = text.find_first_not_of(L' ');
         const size_t continuationIndent = (std::min)(leading == text.npos ? size_t{0} : leading, width_ / 3);
         bool continuation = false;
@@ -286,18 +268,16 @@ private:
             if (at < text.size() && space) at = space;
             const auto part = text.substr(0, at);
             width = Columns(part);
-            std::wcout << (sectionWarning_ ? Red() : Dim()) << L"  " << vertical << Rst() << L" " << std::wstring(indent, L' ') << active << link << part;
+            std::wcout << (sectionWarning_ ? Red() : Dim()) << L"  " << vertical << Rst() << L" " << std::wstring(indent, L' ') << active << part;
             // Reapply the content's style after each border; borders never inherit it.
             for (size_t i = 0; i < part.size();) {
                 const auto escape = EscapeLength(part, i);
                 if (!escape) { i += GlyphLength(part, i); continue; }
                 const auto code = part.substr(i, escape);
-                if (code.starts_with(L"\x1b]8;;")) link = code.size() == 7 ? L"" : std::wstring(code);
-                else if (code == L"\x1b[0m") active.clear();
+                if (code == L"\x1b[0m") active.clear();
                 else active += code;
                 i += escape;
             }
-            if (!link.empty()) std::wcout << L"\x1b]8;;\x1b\\";
             std::wcout << Rst() << std::wstring(width_ - indent - width, L' ')
                        << L" " << (sectionWarning_ ? Red() : Dim()) << vertical << Rst() << L"\n";
             text.remove_prefix(at);

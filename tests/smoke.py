@@ -140,26 +140,25 @@ def main():
         assert 'pendingCount' not in unknown_updates['windowsUpdate']
         for width in (40, 80, 120):
             styled = (Path(scratch) / f'layout-{width}.txt').read_text(encoding='utf-8')
-            plain = re.sub(r'\x1b\]8;;[^\x1b]*\x1b\\|\x1b\[[0-9;]*m', '', styled)
+            plain = re.sub(r'\x1b\[[0-9;]*m', '', styled)
             assert '\x1b' not in plain
             for line in plain.splitlines():
                 if line.startswith('  \u2502') or line.startswith('  \u250c') or line.startswith('  \u2514'):
                     cells = sum(0 if unicodedata.combining(c) else 2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1 for c in line)
                     assert cells == width - 1, (width, cells, line)
-            assert plain.count('X') >= 170 and 'Settings' in plain
+            assert plain.count('X') >= 170 and '[Settings' not in plain
         print(output.strip())
 
-    pages, _ = run(app, '--settings')
-    assert 'system - System / About' in pages and 'update - Windows Update' in pages
-    invalid_page = subprocess.run([str(app), '--settings', 'https://example.com'], capture_output=True, timeout=10)
-    assert invalid_page.returncode == 2
+    for removed_args in [('--settings',), ('--settings', 'update')]:
+        removed = subprocess.run([str(app), *removed_args], capture_output=True, timeout=10)
+        assert removed.returncode == 2 and b'Unknown option:' in removed.stderr and not removed.stdout
     help_text, _ = run(app, '--help')
-    assert 'Usage:' in help_text
+    assert 'Usage:' in help_text and '--settings' not in help_text
     invalid = subprocess.run([str(app), '--no-hahs'], capture_output=True, timeout=10)
     assert invalid.returncode == 2 and b'Unknown option:' in invalid.stderr and not invalid.stdout
     report, no_hash_time = export_report(app, '--no-hash')
     expected = {'system', 'hardware', 'security', 'defender', 'firewall', 'storage', 'network',
-                'antivirus', 'hardening', 'registryFindings', 'directoryFindings', 'score', 'windowsUpdate'}
+                'antivirus', 'hardening', 'score', 'windowsUpdate'}
     assert expected <= report.keys()
     assert report['score']['maximum'] == sum(r['maxPoints'] for r in report['score']['rules']) == 1000
     assert report['score']['total'] == sum(r['awardedPoints'] for r in report['score']['rules'])
@@ -193,14 +192,14 @@ def main():
             assert rules[rule_id]['state'] == 'Unknown' and rules[rule_id]['awardedPoints'] == 0
     services = report['windowsUpdate']['services']
     assert len({s['name'].lower() for s in services}) == len(services)
-    assert all(f['name'] for f in report['registryFindings'])
+    assert 'registryFindings' not in report and 'directoryFindings' not in report
     assert 'applications' not in report
     assert 'hyg.appinv' not in rules
     normal, default_time = export_report(app)
     assert 'applications' not in normal
     console, _ = run(app, '--no-hash')
     assert 'SECURITY SCORE' in console and '\x1b[' not in console
-    assert 'Inventory Coverage' not in console
+    assert all(hidden not in console for hidden in ['Inventory Coverage', 'Threshold Findings', '[Settings', '--settings'])
     assert ('[!] LIMITED ACCESS' in console) == (not report['security']['elevated'])
     assert 'BACKUP REPORT' not in console and '-- Applications' not in console
     assert 'Windows update details available' not in console

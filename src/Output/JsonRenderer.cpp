@@ -115,18 +115,6 @@ std::string RenderJson(const AssessmentResult& r, JsonFormat format) {
         item.Set("diskMappingStatus", StatusS(value.diskMappingStatus));
         item.Set("diskIndices", Array(value.diskIndices, [](auto index) { return std::to_string(index); })); return item.Finish();
     })); root.Set("storage", storage.Finish());
-    root.Set("registryFindings", Array(r.registryFindings, [](const auto& value) {
-        JsonObject item; item.Text("name", value.name); item.Text("description", value.description); item.Text("path", value.path);
-        item.Set("status", StatusS(value.status)); item.Set("exceeded", B(value.exceeded));
-        item.Set("valueCount", std::to_string(value.valueCount)); item.Set("threshold", std::to_string(value.threshold));
-        return item.Finish();
-    }));
-    root.Set("directoryFindings", Array(r.directoryFindings, [](const auto& value) {
-        JsonObject item; item.Text("name", value.name); item.Text("description", value.description); item.Text("path", value.path);
-        item.Set("status", StatusS(value.status)); item.Set("exceeded", B(value.exceeded));
-        item.Set("fileCount", std::to_string(value.fileCount)); item.Set("threshold", std::to_string(value.threshold));
-        return item.Finish();
-    }));
     JsonObject score;
     score.Set("total", std::to_string(r.score.total)); score.Set("maximum", std::to_string(r.score.maximum));
     score.Set("registeredAntivirusScoring", B(r.score.registeredAntivirusScoring));

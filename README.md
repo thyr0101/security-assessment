@@ -16,7 +16,7 @@ It uses built-in Windows interfaces. It does not contact online services, run ex
 - **Account protection:** secure permission prompts, the built-in Guest account, account lockout, and Remote Assistance invitations.
 - **Windows Update:** pending updates from the local cache, update-service readiness, restart requirements and the latest recorded installation result. Pending updates are listed without affecting the score.
 
-Threshold findings show registry and directory counts, review thresholds, paths and descriptions. They are informational and do not affect the score; high counts are not evidence of malware. Privacy settings and minimum password length are not collected.
+Only registry or directory counts above their review thresholds appear in the warnings section, all at Medium severity. Each includes its path, count, threshold and description. They do not affect the score; high counts are not evidence of malware. Privacy settings and minimum password length are not collected.
 
 ## Run an assessment
 
@@ -29,14 +29,6 @@ The documented build configuration targets **64-bit Windows 10 or newer**. Open 
 Run the terminal **as administrator** for the fullest assessment. A warning box identifies live assessments without administrator access. Restricted checks remain unverified instead of being reported as disabled.
 
 Each category appears in its own box, with long values wrapping inside the border. The console ends with the **rule breakdown**, **total score**, and **warnings**, in that order. Warnings are grouped as Critical, High, Medium, or Low and include an action to review. Missing evidence is clearly identified as a verification gap.
-
-## Open Windows settings
-
-Relevant headings and checks have Settings shortcuts in an interactive console. In Windows Terminal, use **Ctrl+click** on `[Settings]`; the terminal may ask you to confirm opening the URI. Other terminals show an identifier such as `[Settings: update]`.
-
-Use `SecurityAssessment.exe --settings update` to open Windows Update directly, or `SecurityAssessment.exe --settings` to list supported pages. Navigation does not collect an assessment. System opens **System > About**. Checks without a dedicated modern Settings page use their relevant parent page; availability depends on Windows version and edition.
-
-Shortcuts always open settings on this computer, including when viewing a backup. No security setting is changed automatically. Redirected reports omit buttons and terminal control sequences.
 
 ## Save a JSON report
 
@@ -68,7 +60,7 @@ Omit the filename to generate one in the current folder. The destination folder 
 
 This opens the regular console report using the saved data and scores. A red warning box below the title states that you are viewing a backup and the results do not represent the current system state. It does not run another assessment.
 
-Warnings are omitted from JSON exports. The saved report viewer displays **“Warnings are disabled when viewing an export”**. The viewer accepts only compact mode `0` reports. Readable mode `1` reports and older plain-text JSON exports are rejected with an explanation.
+Warnings and their threshold scan records are omitted from JSON exports. The saved report viewer displays **“Warnings are disabled when viewing an export”**. The viewer accepts only compact mode `0` reports. Readable mode `1` reports and older plain-text JSON exports are rejected with an explanation.
 
 For command help:
 

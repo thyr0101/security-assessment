@@ -43,7 +43,7 @@ ScoreRuleResult Partial(const R& r, int pts, const std::string& state, const std
 }
 } // namespace
 
-ScoreReport ComputeScore(const AssessmentResult& a) {
+ScoreReport ComputeScore(const AssessmentResult& a, bool includeWarnings) {
     ScoreReport rep;
     rep.maximum = 1000;
     rep.rules.reserve(64);
@@ -467,7 +467,7 @@ ScoreReport ComputeScore(const AssessmentResult& a) {
     }
     rep.total = total;
     rep.maximum = maximum;
-    warnings::BuildWarnings(a, rep);
+    if (includeWarnings) warnings::BuildWarnings(a, rep);
     return rep;
 }
 

@@ -4,7 +4,6 @@
 
 ### Added
 
-- Settings shortcuts beside relevant headings and checks, plus `--settings <page>` navigation and `--settings` to list pages.
 - A prominent warning above live assessments running without administrator privileges.
 - Expanded threshold scans with descriptions, full paths, counts and read statuses. Added startup registration/approval locations and user/shared startup folders.
 - A shared warning catalog in `src/Warnings.h` for notices, rule context, severity and recommendations.
@@ -12,12 +11,14 @@
 ### Changed
 
 - Exclude Defender from product scoring whenever a third-party antivirus is registered, regardless of either product's state. Defender displays **Not scored**. Third-party products earn credit only when confirmed enabled; the category cap remains **180/1000**.
-- Enumerate directory entries directly through Win32, normalize/deduplicate scan paths and retain displayed threshold descriptions in JSON backups.
+- Enumerate directory entries directly through Win32, normalize/deduplicate scan paths and report only exceeded thresholds as Medium warnings with paths, counts and descriptions. Threshold scans and warning generation are skipped for JSON export.
 - Separate threshold and update-service collectors and remove obsolete startup-readability collection and its zero-point rule.
 
 ### Removed
 
 - The **Inventory Coverage (informational)** section.
+- The standalone **Threshold Findings** category and threshold records in JSON exports. Older backups remain viewable.
+- Clickable Settings shortcuts, their navigation helpers and the `--settings` argument.
 
 ## First release
 

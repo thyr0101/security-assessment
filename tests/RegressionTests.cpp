@@ -13,7 +13,6 @@
 #include "Output/ConsoleLayout.h"
 #include "Security/ScoreEngine.h"
 #include "Warnings.h"
-#include "SettingsNavigation.h"
 #include "WmiHelper.h"
 #include <comdef.h>
 #include <wrl/client.h>
@@ -485,7 +484,7 @@ static std::wstring CaptureConsole(const AssessmentResult& result, ReportView vi
     std::wcout.rdbuf(original);
     return captured.str();
 }
-static void TestNoticesAndNavigation(Fixture& fixture) {
+static void TestNoticesAndThresholdWarnings(Fixture& fixture) {
     AssessmentResult result;
     result.score = ComputeScore(result);
     const auto live = CaptureConsole(result);
@@ -497,9 +496,6 @@ static void TestNoticesAndNavigation(Fixture& fixture) {
     Check(CaptureConsole(result).find(warnings::nonAdminTitle) == std::wstring::npos, "administrator report has no limited-access notice");
     Check(CaptureConsole(result, ReportView::Export).find(warnings::nonAdminTitle) == std::wstring::npos,
           "backup never uses recorded elevation to claim the viewing process is non-admin");
-    for (const auto label : {L"System", L"Microsoft Defender", L"Windows Update", L"Network Security", L"Storage", L"Remote Desktop"})
-        Check(SettingsFor(label) && std::wstring_view(SettingsFor(label)->uri).starts_with(L"ms-settings:"), "settings mapping is fixed and local");
-    Check(!FindSettingsPage(L"https://example.com") && !SettingsFor(L"UNTRUSTED_IMPORT"), "file labels cannot select arbitrary URIs");
     for (const size_t columns : {size_t{40}, size_t{80}, size_t{120}}) {
         auto sample = result;
         sample.os.productName = std::wstring(170, L'X');
@@ -507,13 +503,12 @@ static void TestNoticesAndNavigation(Fixture& fixture) {
         std::wostringstream captured;
         auto* original = std::wcout.rdbuf(captured.rdbuf());
         try {
-            console_detail::ConsoleLayout layout(columns, true, true);
+            console_detail::ConsoleLayout layout(columns, true);
             layout.Render(sample, ReportView::Export);
         } catch (...) { std::wcout.rdbuf(original); throw; }
         std::wcout.rdbuf(original);
-        Check(captured.str().find(L"\x1b]8;;ms-settings:about\x1b\\") != std::wstring::npos,
-              "Settings buttons emit fixed OSC 8 URIs");
-        Check(captured.str().find(L"UNTRUSTED_IMPORT") == std::wstring::npos, "no file-provided navigation");
+        Check(captured.str().find(L"\x1b]8;") == std::wstring::npos &&
+              captured.str().find(L"[Settings") == std::wstring::npos, "report contains no Settings links");
         std::ofstream("layout-" + std::to_string(columns) + ".txt", std::ios::binary) << WideToUtf8(captured.str());
     }
     for (const auto& definition : DefaultRegistryScans()) Check(!definition.description.empty(), "every registry scan has a description");
@@ -522,13 +517,62 @@ static void TestNoticesAndNavigation(Fixture& fixture) {
         {L"duplicate", (fixture.dir / L".").wstring(), 0, false, L"Duplicate"}});
     Check(scans.size() == 1 && scans[0].description == L"Description sentinel", "normalized duplicate directories are scanned once");
     result.directoryFindings = scans;
-    result.registryFindings = RunRegistryScans({{L"registry fixture", fixture.key.get(), L"", 99, 0, L"Registry description"}});
+    result.registryFindings = RunRegistryScans({{L"registry fixture", fixture.key.get(), L"", 0, 0, L"Registry description"}});
     result.score = ComputeScore(result);
+    const auto total = result.score.total;
+    const auto thresholdWarnings = [](const ScoreReport& score) {
+        return std::ranges::count_if(score.warnings, [](const auto& warning) { return warning.ruleId.starts_with("threshold."); });
+    };
+    Check(thresholdWarnings(result.score) == 2, "exceeded registry and directory thresholds produce warnings");
+    for (const auto& warning : result.score.warnings) {
+        if (!warning.ruleId.starts_with("threshold.")) continue;
+        Check(warning.severity == Severity::Medium && !warning.verificationOnly, "all threshold warnings have Medium severity");
+        Check(warning.detail.find("description") != std::string::npos || warning.detail.find("Description") != std::string::npos,
+              "threshold warnings retain the location description");
+        Check(warning.detail.find("review threshold: 0") != std::string::npos && !warning.recommendation.empty(),
+              "threshold warnings include count, limit and review advice");
+    }
+    const auto warningView = CaptureConsole(result);
+    Check(warningView.find(L"Threshold Findings") == std::wstring::npos, "standalone threshold category removed");
+    Check(warningView.find(L"Review threshold exceeded: registry fixture") > warningView.find(L"+- Warnings") &&
+          std::ranges::any_of(result.score.warnings, [&](const auto& warning) {
+              return warning.detail.find(WideToUtf8(scans[0].path)) != std::string::npos; }),
+          "exceeded locations appear within warnings with paths");
+    Check(ComputeScore(result, false).warnings.empty() && ComputeScore(result, false).total == total,
+          "exports skip warnings without changing scoring");
     const auto path = fixture.dir / L"thresholds.json";
+    const auto readable = RenderJson(result, JsonFormat::Readable);
+    Check(readable.find("registryFindings") == std::string::npos && readable.find("directoryFindings") == std::string::npos &&
+          readable.find("Registry description") == std::string::npos, "warning-only data is not exported");
     Check(SaveJsonReport(RenderJson(result, JsonFormat::Compact), path).has_value(), "save threshold fixture");
     const auto restored = ReadJsonReport(path);
-    Check(restored && restored->registryFindings[0].description == L"Registry description" &&
-          restored->directoryFindings[0].description == L"Description sentinel", "all displayed threshold descriptions round-trip");
+    Check(restored && restored->registryFindings.empty() && restored->directoryFindings.empty() && restored->score.warnings.empty(),
+          "backups omit warnings and threshold scan records");
+    Check(CaptureConsole(result, ReportView::Export).find(L"Review threshold exceeded:") == std::wstring::npos,
+          "backup viewer never shows live threshold warnings");
+    // Older exports can contain these records; they must not become viewer warnings.
+    const auto legacyPath = fixture.dir / L"legacy-thresholds.json";
+    auto legacy = readable;
+    legacy.insert(1, R"("registryFindings":[{"name":"OLD_THRESHOLD","valueCount":99,"threshold":1,"exceeded":true,"status":"Success"}],)");
+    Check(SaveJsonReport(CompactJson(legacy), legacyPath).has_value(), "save legacy threshold fields");
+    const auto oldReport = ReadJsonReport(legacyPath);
+    Check(oldReport && oldReport->registryFindings.empty() && oldReport->score.warnings.empty() && oldReport->score.total == total,
+          "legacy threshold records are ignored without rescoring");
+    result.registryFindings[0].valueCount = 0;
+    result.registryFindings[0].exceeded = false;
+    result.directoryFindings[0].threshold = result.directoryFindings[0].fileCount;
+    result.directoryFindings[0].exceeded = false;
+    Check(thresholdWarnings(ComputeScore(result)) == 0, "counts at or below limits produce no threshold warning");
+    result.directoryFindings[0].status = Status::AccessDenied;
+    result.directoryFindings[0].fileCount = 0;
+    Check(thresholdWarnings(ComputeScore(result)) == 0, "unreadable locations without an exceeded count produce no warning");
+    result.directoryFindings[0].threshold = 1;
+    result.directoryFindings[0].fileCount = 2;
+    result.directoryFindings[0].exceeded = true;
+    const auto partial = ComputeScore(result);
+    const auto partialWarning = std::ranges::find(partial.warnings, "threshold.directory", &SecurityWarning::ruleId);
+    Check(partialWarning != partial.warnings.end() && partialWarning->detail.find("Partial count") != std::string::npos &&
+          partialWarning->severity == Severity::Medium && partial.total == total, "exceeded partial counts are explicit and do not change score");
 }
 
 static void TestHardeningAndWarnings() {
@@ -750,7 +794,7 @@ int main() {
         TestRegisteredAntivirus();
         TestWindowsUpdate();
         TestPartialCollection();
-        TestNoticesAndNavigation(fixture);
+        TestNoticesAndThresholdWarnings(fixture);
         TestHardeningAndWarnings();
         TestJsonFiles(fixture);
         TestNetworkSignIn();

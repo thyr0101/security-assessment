@@ -44,6 +44,26 @@ void BuildWarnings(const AssessmentResult& assessment, ScoreReport& report) {
             : contextRunAsAdministratorToVerifyRestrictedChecks;
         report.warnings.push_back(std::move(coverage));
     }
+    // Only exceeded locations belong in the report. Partial enumerations can
+    // still establish that a threshold was exceeded; label their count explicitly.
+    const auto addThreshold = [&](const auto& finding, unsigned long long count,
+                                  const char* id, const char* units) {
+        if (!finding.exceeded || count <= finding.threshold) return;
+        SecurityWarning warning;
+        warning.ruleId = id;
+        warning.severity = Severity::Medium;
+        warning.title = thresholdTitle + WideToUtf8(finding.name);
+        warning.detail = WideToUtf8(finding.path) + ": " + std::to_string(count) + units +
+            std::to_string(finding.threshold) + ". " + WideToUtf8(finding.description);
+        if (finding.status != Status::Success)
+            warning.detail += thresholdPartial + WideToUtf8(ToW(finding.status)) + ".";
+        warning.recommendation = thresholdRecommendation;
+        report.warnings.push_back(std::move(warning));
+    };
+    for (const auto& finding : assessment.registryFindings)
+        addThreshold(finding, finding.valueCount, "threshold.registry", thresholdValues);
+    for (const auto& finding : assessment.directoryFindings)
+        addThreshold(finding, finding.fileCount, "threshold.directory", thresholdFiles);
     std::ranges::stable_sort(report.warnings, std::greater{}, &SecurityWarning::severity);
 }
 } // namespace sa::warnings

@@ -2,23 +2,35 @@
 
 ## Unreleased
 
+Changes since the first-release changelog.
+
 ### Added
 
-- A prominent warning above live assessments running without administrator privileges.
-- Expanded threshold scans with descriptions, full paths, counts and read statuses. Added startup registration/approval locations and user/shared startup folders.
-- A shared warning catalog in `src/Warnings.h` for notices, rule context, severity and recommendations.
+- A warning box above live assessments when the app is running without administrator privileges.
+- Additional threshold checks for startup registry locations and user/shared Startup folders, with descriptions for each location.
+- A centralized warning catalog for warning text, severity, context and recommendations.
 
 ### Changed
 
-- Exclude Defender from product scoring whenever a third-party antivirus is registered, regardless of either product's state. Defender displays **Not scored**. Third-party products earn credit only when confirmed enabled; the category cap remains **180/1000**.
-- Enumerate directory entries directly through Win32, normalize/deduplicate scan paths and report only exceeded thresholds as Medium warnings with paths, counts and descriptions. Threshold scans and warning generation are skipped for JSON export.
-- Separate threshold and update-service collectors and remove obsolete startup-readability collection and its zero-point rule.
+- **Antivirus scoring:** When a third-party antivirus is registered, Microsoft Defender is marked **Not scored**, regardless of either product's state. Enabled third-party products earn credit; disabled or unknown products earn none. The overall antivirus contribution remains capped at **180 points**.
+- **Threshold warnings:** Only locations exceeding their review thresholds appear, alongside other warnings at **Medium** severity. Findings include the location, count, threshold and description. Partial counts are identified explicitly. These warnings do not affect the score.
+- **JSON exports:** Omit threshold scan records and skip warning-only scans and warning generation during export. Older compact backups remain viewable with their recorded scores; warnings remain disabled in the backup viewer.
+- **Purple accents:** Use purple for `[+]` markers, disk names and category names in the rule breakdown.
+- **Disk identifiers:** Display identifiers such as `Disk0` in light yellow, including references to disks in spanned volumes.
+- **Category score colors:** Use green for full marks, orange for scores above 50% but below full marks, and yellow for scores at or below 50%.
+- **Orange highlights:** Use orange for Smart App Control's `[Evaluation]` state and Medium warnings.
+- **Collection and cleanup:** Use direct Win32 directory enumeration, deduplicate equivalent scan paths and separate threshold scans from update-service queries. Remove obsolete navigation, hyperlink handling and startup-readability code.
 
 ### Removed
 
-- The **Inventory Coverage (informational)** section.
-- The standalone **Threshold Findings** category and threshold records in JSON exports. Older backups remain viewable.
-- Clickable Settings shortcuts, their navigation helpers and the `--settings` argument.
+- The standalone **Threshold Findings** category. Exceeded thresholds now appear only in warnings.
+- The **Inventory Coverage (informational)** section and its obsolete zero-point rule.
+- Clickable Settings shortcuts and the `--settings` command-line argument.
+
+### Validation
+
+- Passed Debug and Release regression and smoke checks, AddressSanitizer and MSVC static analysis after the threshold and navigation cleanup.
+- Successfully built the subsequent console color changes in Release configuration.
 
 ## First release
 
